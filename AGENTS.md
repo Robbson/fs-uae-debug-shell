@@ -287,9 +287,21 @@ Prioritize tests for:
 * Process termination and cleanup.
 
 Use captured FS-UAE output as fixtures wherever possible.
+The program is available as _fs-uae_. Please use the following command line parameters to start the program.
+```
+fs-uae --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae
+```
+This brings you directly to a running game. DON'T scan the filesystem for any kind of fs-uae configuration, just use those parameters. The config is already prepared for terminal debugging.
 
-Do not claim that integration tests pass unless they have actually been run. If FS-UAE is unavailable in the development environment, clearly distinguish unit-test coverage from unverified integration behavior.
+Ask the user to activate the debugger if necessary because there is no automatic way doing so at startup.
+You can use the following addresses to watch some permanently changing variables:
+Ball position (x, y, vx, vy)
+$574 (word)
+$576 (word)
+$580 (word)
+$582 (word)
 
+Do not claim that integration tests pass unless they have actually been run. 
 Avoid tests that depend on arbitrary timing delays when a deterministic synchronization mechanism is available.
 
 ## 8. Error Handling and Diagnostics
