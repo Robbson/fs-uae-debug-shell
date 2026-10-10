@@ -1,17 +1,13 @@
 # Observed FS-UAE 3.2.35 debugger output
 
-All formats below were captured from real FS-UAE 3.2.35 sessions on Linux
-(`fs-uae --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae`).  The raw
-captures are committed as test fixtures:
+All formats below were captured from real FS-UAE 3.2.35 sessions on Linux (`fs-uae --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae`).  The raw captures are committed as test fixtures:
 
-- `tests/fixtures/watchpoint_session.txt` — one activation followed by eight
-  consecutive watchpoint hits.
+- `tests/fixtures/watchpoint_session.txt` — one activation followed by eight consecutive watchpoint hits.
 - `tests/fixtures/watchpoint_session_1.txt` — a single watchpoint hit.
 
 ## Activating the debugger
 
-Activated manually with F12+D.  A watchpoint hit produces no
-`WARNING: Activated debugger` line; it starts with a `Memwatch` line instead.
+Activated manually with F12+D.  A watchpoint hit produces no `WARNING: Activated debugger` line; it starts with a `Memwatch` line instead.
 
 ```text
 WARNING: Activated debugger
@@ -28,8 +24,7 @@ Next PC: 00008a6e
 >
 ```
 
-The prompt is a bare `>` at the start of a line.  It is **not** newline
-terminated, so the parser recognises it as soon as it appears at a line start.
+The prompt is a bare `>` at the start of a line.  It is **not** newline terminated, so the parser recognises it as soon as it appears at a line start.
 
 ## Adding a watchpoint
 
@@ -40,8 +35,7 @@ Memwatch breakpoints enabled
 ```
 
 - `Memwatch breakpoints enabled` is a fixed line.
-- The definition line has the form
-  ` <id>: <start> - <end> (<length>)  <access>  <scope>`.
+- The definition line has the form ` <id>: <start> - <end> (<length>)  <access>  <scope>`.
 
 `fl` lists *breakpoints* (not watchpoints) and prints `No breakpoints`.
 
@@ -70,13 +64,8 @@ Memwatch <id>: break at <addr>.<size>  <access>  <value> PC=<pc> <trailer>
 - `<pc>`: 8 hex digits.
 - `<trailer>`: informational only (observed `CPUDW (000)`).
 
-A hit is followed by the same register dump / disassembly / `Next PC` block as
-a manual activation, ending in the `>` prompt.  Automatic resume must wait for
-that prompt before sending `g`.
+A hit is followed by the same register dump / disassembly / `Next PC` block as a manual activation, ending in the `>` prompt.  Automatic resume must wait for that prompt before sending `g`.
 
 ## Terminal echo
 
-In a plain FS-UAE session the child PTY has kernel echo enabled, so typed
-commands are echoed back (`>r`, `>g`, ...).  The wrapper disables child echo
-and performs its own local echo so that intercepted `:` commands are never
-echoed by the emulator and commands are not shown twice.
+In a plain FS-UAE session the child PTY has kernel echo enabled, so typed commands are echoed back (`>r`, `>g`, ...).  The wrapper disables child echo and performs its own local echo so that intercepted `:` commands are never echoed by the emulator and commands are not shown twice.
