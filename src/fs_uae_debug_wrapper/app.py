@@ -1,0 +1,266 @@
+"""Application orchestration: the transparent wrapper loop."""
+
+from __future__ import annotations
+
+import logging
+import os
+import select
+import signal
+import sys
+from pathlib import Path
+
+from .commands import CommandDispatcher, CommandResult
+from .config import AppConfig
+from .eventlog import EventLogError
+from .parser import DebuggerOutputParser, Event, EventType, WatchpointHit
+from .session import Session, SessionError, SessionState
+from .terminal import InputEvent, LineEditor, Terminal
+from .watchpoints import WatchpointManager
+
+log = logging.getLogger("fs_uae_debug_wrapper")
+
+
+class Application:
+    """Wire the terminal, the FS-UAE session and the automation features."""
+
+    def __init__(self, config: AppConfig) -> None:
+        self.config = config
+        self.session = Session(config.executable, config.fsuae_args)
+        self.parser = DebuggerOutputParser()
+        self.watchpoints = WatchpointManager()
+        self.auto_resume = config.auto_resume
+        self.state = SessionState.RUNNING
+        self._pending_resume = False
+        self._at_prompt = False
+        self._stopping = False
+        self._winch = False
+        self._definitions: dict[int, str] = {}
+        self._terminal: Terminal | None = None
+        self._editor = LineEditor()
+        self.dispatcher = CommandDispatcher(
+            prefix=config.prefix,
+            manager=self.watchpoints,
+            status_provider=self._status_text,
+            auto_resume_get=lambda: self.auto_resume,
+            auto_resume_set=self._set_auto_resume,
+            base_dir=Path.cwd(),
+        )
+
+    # -- lifecycle -----------------------------------------------------------
+
+    def run(self) -> int:
+        try:
+            self.session.start(dimensions=Terminal.size())
+        except SessionError as exc:
+            log.error("%s", exc)
+            return 2
+
+        self._print_startup_banner()
+        previous_winch = signal.getsignal(signal.SIGWINCH)
+        signal.signal(signal.SIGWINCH, self._on_winch)
+        try:
+            with Terminal() as terminal:
+                self._terminal = terminal
+                self.session.set_dimensions(*Terminal.size())
+                self._loop(terminal)
+        finally:
+            signal.signal(signal.SIGWINCH, previous_winch)
+            self._terminal = None
+            self._shutdown()
+        return 0
+
+    def _loop(self, terminal: Terminal) -> None:
+        while not self._stopping and self.session.alive():
+            self._handle_winch()
+            try:
+                readable, _, _ = select.select(
+                    [terminal.fd, self.session.fd], [], [], 0.2
+                )
+            except InterruptedError:
+                continue
+            except OSError as exc:
+                log.error("terminal select failed: %s", exc)
+                break
+
+            if self.session.fd in readable:
+                data = self._read_child()
+                if not data:
+                    break
+                terminal.write(data)
+                self._process_events(self.parser.feed(data.decode("latin-1")))
+
+            if terminal.fd in readable:
+                try:
+                    incoming = terminal.read()
+                except OSError as exc:
+                    log.error("reading terminal input failed: %s", exc)
+                    break
+                if not incoming:
+                    break
+                self._handle_input(terminal, self._editor.feed(incoming, terminal.write))
+
+    def _shutdown(self) -> None:
+        self.watchpoints.close()
+        self.session.close()
+
+    # -- child output --------------------------------------------------------
+
+    def _read_child(self) -> bytes:
+        try:
+            return os.read(self.session.fd, 65536)
+        except OSError:
+            return b""
+
+    def _process_events(self, events: list[Event]) -> None:
+        for event in events:
+            if event.type is EventType.WATCHPOINT_HIT and event.hit is not None:
+                self._at_prompt = False
+                self._on_hit(event.hit)
+            elif event.type is EventType.DEBUGGER_ACTIVATED:
+                self.state = SessionState.STOPPED
+                self._at_prompt = False
+                self._pending_resume = False
+            elif event.type is EventType.PROMPT:
+                self._at_prompt = True
+                self._on_prompt()
+            elif event.type is EventType.WATCHPOINT_DEFINED and event.definition is not None:
+                definition = event.definition
+                self._definitions[definition.watchpoint] = (
+                    f"{definition.start:08X}-{definition.end:08X} "
+                    f"({definition.length}) {definition.access} {definition.scope}"
+                )
+
+    def _on_hit(self, hit: WatchpointHit) -> None:
+        self.state = SessionState.STOPPED
+        config = self.watchpoints.get(hit.watchpoint)
+        if config is None:
+            self._pending_resume = False
+            self._write(
+                f"\n[wrapper] watchpoint {hit.watchpoint} hit at "
+                f"{hit.address:08X}.{hit.size} {hit.access} value={hit.value:08X} "
+                f"pc={hit.pc:08X} (not logging; not resuming)\n"
+            )
+            return
+        try:
+            config.writer.append(hit)
+        except EventLogError as exc:
+            log.error("%s", exc)
+            self._write(
+                f"\n[wrapper] error: failed to log watchpoint {hit.watchpoint}: {exc}\n"
+                "[wrapper] leaving emulator stopped\n"
+            )
+            self._pending_resume = False
+            return
+
+        resuming = self.auto_resume
+        suffix = "resuming" if resuming else "auto-resume disabled"
+        self._write(
+            f"\n[wrapper] watchpoint {hit.watchpoint} -> {config.path}: "
+            f"addr={hit.address:08X} size={hit.size} access={hit.access} "
+            f"value={hit.value:08X} pc={hit.pc:08X} ({suffix})\n"
+        )
+        self._pending_resume = resuming
+
+    def _on_prompt(self) -> None:
+        self.state = SessionState.STOPPED
+        if not self._pending_resume:
+            return
+        self._pending_resume = False
+        if self._editor.pending:
+            log.warning("auto-resume skipped: user input is pending")
+            self._write(
+                "[wrapper] auto-resume skipped because you are typing; "
+                "send 'g' to continue\n"
+            )
+            return
+        try:
+            self.session.send_bytes(b"g\n")
+        except SessionError as exc:
+            log.error("auto-resume failed: %s", exc)
+            return
+        self._at_prompt = False
+        self.state = SessionState.RUNNING
+
+    # -- user input ----------------------------------------------------------
+
+    def _handle_input(self, terminal: Terminal, events: list[InputEvent]) -> None:
+        for event in events:
+            if event.kind == "raw":
+                self._forward_raw(event.data)
+                continue
+            self._handle_line(terminal, event.data)
+
+    def _handle_line(self, terminal: Terminal, raw_line: bytes) -> None:
+        text = raw_line.decode("utf-8", errors="replace")
+        if self.dispatcher.handles(text):
+            result: CommandResult = self.dispatcher.dispatch(text)
+            self._write(f"\n[wrapper] {result.output}\n")
+            if result.quit:
+                self._stopping = True
+            elif self._at_prompt:
+                self._write(">")
+            return
+        self._at_prompt = False
+        self._pending_resume = False
+        try:
+            self.session.send_bytes(raw_line + b"\n")
+        except SessionError as exc:
+            log.error("forwarding command failed: %s", exc)
+
+    def _forward_raw(self, data: bytes) -> None:
+        self._at_prompt = False
+        self._pending_resume = False
+        try:
+            self.session.send_bytes(data)
+        except SessionError as exc:
+            log.error("forwarding input failed: %s", exc)
+
+    # -- helpers -------------------------------------------------------------
+
+    def _set_auto_resume(self, enabled: bool) -> None:
+        self.auto_resume = enabled
+
+    def _status_text(self) -> str:
+        lines = [
+            f"state: {self.state.value}",
+            f"fs-uae: {self.config.executable} {' '.join(self.config.fsuae_args)}".rstrip(),
+            f"automatic resume: {'on' if self.auto_resume else 'off'}",
+        ]
+        configs = self.watchpoints.configs()
+        if configs:
+            lines.append("logging watchpoints:")
+            for config in configs:
+                lines.append(f"  {config.watchpoint} -> {config.path}")
+        else:
+            lines.append("logging watchpoints: none")
+        if self._definitions:
+            lines.append("debugger watchpoints:")
+            for key in sorted(self._definitions):
+                lines.append(f"  {key}: {self._definitions[key]}")
+        return "\n".join(lines)
+
+    def _write(self, text: str) -> None:
+        if self._terminal is not None:
+            self._terminal.write(text.encode("utf-8", errors="replace"))
+
+    def _print_startup_banner(self) -> None:
+        args = " ".join(self.config.fsuae_args)
+        sys.stderr.write(
+            "[wrapper] started FS-UAE"
+            + (f" ({args})" if args else "")
+            + "; activate the debugger with F12+D when the game is running.\n"
+            f"[wrapper] type '{self.config.prefix}help' at the debugger prompt "
+            "for wrapper commands.\n"
+        )
+        sys.stderr.flush()
+
+    # -- signals -------------------------------------------------------------
+
+    def _on_winch(self, _signum: int, _frame: object) -> None:
+        self._winch = True
+
+    def _handle_winch(self) -> None:
+        if not self._winch:
+            return
+        self._winch = False
+        self.session.set_dimensions(*Terminal.size())
