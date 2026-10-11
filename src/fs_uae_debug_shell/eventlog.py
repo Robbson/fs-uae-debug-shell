@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -19,16 +20,28 @@ def _hex(value: int, width: int = 8) -> str:
     return f"0x{value:0{width}X}"
 
 
+def aggregated_header(columns: Sequence[int]) -> list[str]:
+    """Return the wide header used by frame aggregation, one column per watchpoint."""
+
+    return ["timestamp", "frame", *(f"wp{watchpoint}" for watchpoint in columns)]
+
+
 class CsvEventWriter:
     """Append-only CSV writer for watchpoint hits.
 
     The file is opened in append mode.  A header row is written only when the
     file is newly created or empty.  Every record is flushed immediately so
     recent data survives an abrupt process termination.
+
+    With *columns* the writer uses the wide frame-aggregation schema
+    (``timestamp,frame,wp1,wp2,...``) and accepts whole frames via
+    :meth:`append_frame`; without it the writer uses the per-hit schema and
+    accepts single hits via :meth:`append`.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, columns: Sequence[int] | None = None) -> None:
         self.path = Path(path)
+        self._columns = None if columns is None else tuple(columns)
         try:
             is_new = not self.path.exists() or self.path.stat().st_size == 0
         except OSError as exc:
@@ -40,7 +53,18 @@ class CsvEventWriter:
         self._writer = csv.writer(self._file)
         self._disabled = False
         if is_new:
-            self._write_row(HEADER)
+            self._write_row(self._header())
+
+    @property
+    def aggregated(self) -> bool:
+        """Whether this file uses the wide frame-aggregation schema."""
+
+        return self._columns is not None
+
+    def _header(self) -> list[str]:
+        if self._columns is None:
+            return HEADER
+        return aggregated_header(self._columns)
 
     def append(
         self,
@@ -49,6 +73,10 @@ class CsvEventWriter:
     ) -> None:
         """Append one record for *hit*."""
 
+        if self._columns is not None:
+            raise EventLogError(
+                f"cannot append a single hit to the aggregated log '{self.path}'"
+            )
         moment = timestamp if timestamp is not None else datetime.now()
         row = [
             moment.isoformat(timespec="milliseconds"),
@@ -60,6 +88,38 @@ class CsvEventWriter:
             _hex(hit.value),
             _hex(hit.pc),
         ]
+        self._write_row(row)
+
+    def append_frame(
+        self,
+        frame: int,
+        values: dict[int, int],
+        timestamp: datetime | None = None,
+    ) -> None:
+        """Append one record for an aggregated *frame*.
+
+        Each schema column holds the frame's value for that watchpoint, or an
+        empty cell when the watchpoint did not write in the frame.  A
+        watchpoint outside the schema is an error rather than silently dropped:
+        the header was fixed when the file was created.
+        """
+
+        if self._columns is None:
+            raise EventLogError(
+                f"cannot append an aggregated frame to the classic log '{self.path}'"
+            )
+        unknown = sorted(set(values) - set(self._columns))
+        if unknown:
+            raise EventLogError(
+                f"watchpoint(s) {', '.join(str(w) for w in unknown)} appeared after "
+                f"the aggregation header of '{self.path}' was written; start a new "
+                f"log file"
+            )
+        moment = timestamp if timestamp is not None else datetime.now()
+        row: list[object] = [moment.isoformat(timespec="milliseconds"), frame]
+        for watchpoint in self._columns:
+            value = values.get(watchpoint)
+            row.append("" if value is None else _hex(value))
         self._write_row(row)
 
     def _write_row(self, row: list[object]) -> None:

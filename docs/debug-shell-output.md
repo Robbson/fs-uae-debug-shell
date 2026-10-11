@@ -84,6 +84,16 @@ The parser accepts both the original and the enhanced form.  The leading counter
 
 A single frame can contain several hits of the same watchpoint (the game loop runs more often than frames are rendered).  The shell groups hits by `(frame, watchpoint)` and keeps the first, last, or all of them for display and logging, chosen with `:framevalues` (see `README.md` and ADR-0012); classic hits without a counter ignore that choice.  The shell buffers one frame for `last` and flushes it when the frame number changes, when another event arrives, or at shutdown.
 
+With `:frameagg on` (the default) the selected hits of a frame are further condensed into one row that keeps only the frame counter, the watchpoint ids, and their values (ADR-0013).  The example above becomes:
+
+```text
+00000164 01:00000003 02:00000093
+00000165 01:         02:00000094
+00000166 01:         02:0000008D
+```
+
+Watchpoint 01 has no write in frames 165 and 166, so its column stays blank; every known watchpoint column is printed so a missing value is never mistaken for the previous frame's.  The same per-frame shape is written to the CSV log, with one `wp<n>` column per watchpoint.  Only the enhanced output carries a frame counter, so the classic output ignores `:frameagg` and is passed through unchanged.
+
 In the classic form a hit is followed by the same register dump / disassembly / `Next PC` block as a manual activation, ending in the `>` prompt.  The shell parses the hit line and routes the block according to the current output mode: shown unchanged in `shell`/`both` mode, hidden on the terminal in `log` mode (where it is written to the log file instead).  The user decides whether and when to resume with `g`.
 
 In the enhanced form, hits can appear as consecutive lines without an intervening block while the emulator keeps running, which is the stream that `:framevalues` groups by frame (the filtering only applies to the hit lines themselves).

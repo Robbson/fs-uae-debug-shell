@@ -102,5 +102,67 @@ class CsvEventWriterTests(unittest.TestCase):
                 CsvEventWriter(path)
 
 
+class AggregatedCsvEventWriterTests(unittest.TestCase):
+    def test_header_lists_watchpoint_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "frames.csv"
+            CsvEventWriter(path, columns=[1, 2]).close()
+            self.assertEqual(
+                path.read_text(encoding="utf-8").splitlines()[0],
+                "timestamp,frame,wp1,wp2",
+            )
+
+    def test_append_frame_rows_with_empty_cell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "frames.csv"
+            writer = CsvEventWriter(path, columns=[1, 2])
+            ts = datetime(2026, 10, 12, 0, 31, 26, 549000)
+            writer.append_frame(184, {1: 0x1D, 2: 0x60}, timestamp=ts)
+            writer.append_frame(185, {2: 0x61}, timestamp=ts)
+            writer.close()
+            lines = path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(
+                lines[1],
+                "2026-10-12T00:31:26.549,184,0x0000001D,0x00000060",
+            )
+            self.assertEqual(
+                lines[2],
+                "2026-10-12T00:31:26.549,185,,0x00000061",
+            )
+
+    def test_append_frame_rejects_unknown_watchpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "frames.csv"
+            writer = CsvEventWriter(path, columns=[1, 2])
+            with self.assertRaises(EventLogError):
+                writer.append_frame(184, {1: 0x1D, 9: 0x60})
+            writer.close()
+
+    def test_append_frame_on_classic_writer_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "score.csv"
+            writer = CsvEventWriter(path)
+            with self.assertRaises(EventLogError):
+                writer.append_frame(1, {0: 0x1})
+            writer.close()
+
+    def test_append_hit_on_aggregated_writer_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "frames.csv"
+            writer = CsvEventWriter(path, columns=[0])
+            with self.assertRaises(EventLogError):
+                writer.append(make_hit())
+            writer.close()
+
+    def test_aggregated_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            classic = CsvEventWriter(Path(tmp) / "classic.csv")
+            aggregated = CsvEventWriter(Path(tmp) / "aggregated.csv", columns=[1])
+            self.assertFalse(classic.aggregated)
+            self.assertTrue(aggregated.aggregated)
+            classic.close()
+            aggregated.close()
+
+
 if __name__ == "__main__":
     unittest.main()

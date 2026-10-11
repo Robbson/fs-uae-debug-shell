@@ -6,6 +6,7 @@ import shlex
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .aggregate import FrameAggregator
 from .frames import FrameValueMode, FrameValueSelector
 from .output import OutputMode, OutputRouter
 
@@ -31,13 +32,16 @@ shell commands (prefix '{prefix}'):
   {prefix}logfile <file>             set the CSV log file name
   {prefix}framevalues first|last|all keep which hit per frame and watchpoint
                                      (default: first; ignored without a frame counter)
+  {prefix}frameagg on|off            condense each frame into one row of
+                                     watchpoint values (default: on)
   {prefix}quit                       stop the emulator and exit the shell
 All other input is forwarded to the FS-UAE debugger unchanged."""
 
-COMMANDS = ("help", "status", "output", "logfile", "framevalues", "quit")
+COMMANDS = ("help", "status", "output", "logfile", "framevalues", "frameagg", "quit")
 ARGUMENT_CHOICES: dict[str, tuple[str, ...]] = {
     "output": ("shell", "log", "both"),
     "framevalues": ("first", "last", "all"),
+    "frameagg": ("on", "off"),
 }
 
 
@@ -50,11 +54,13 @@ class CommandDispatcher:
         prefix: str,
         output: OutputRouter,
         frames: FrameValueSelector,
+        aggregate: FrameAggregator,
         status_provider: Callable[[], str],
     ) -> None:
         self.prefix = prefix
         self.output = output
         self.frames = frames
+        self.aggregate = aggregate
         self._status_provider = status_provider
 
     def handles(self, line: str) -> bool:
@@ -86,6 +92,10 @@ class CommandDispatcher:
             return CommandResult(output=f"error: {exc}", ok=False)
 
     # -- individual commands -------------------------------------------------
+
+    @staticmethod
+    def _on_off(enabled: bool) -> str:
+        return "on" if enabled else "off"
 
     def _cmd_help(self, args: list[str]) -> CommandResult:
         if args:
@@ -129,6 +139,20 @@ class CommandDispatcher:
             raise UsageError(usage) from exc
         self.frames.set_mode(mode)
         return CommandResult(output=f"frame values: {mode.value}")
+
+    def _cmd_frameagg(self, args: list[str]) -> CommandResult:
+        usage = f"usage: {self.prefix}frameagg on|off"
+        if not args:
+            return CommandResult(
+                output=f"frame aggregation: {self._on_off(self.aggregate.enabled)}"
+            )
+        if len(args) != 1:
+            raise UsageError(usage)
+        value = args[0].lower()
+        if value not in ("on", "off"):
+            raise UsageError(usage)
+        self.aggregate.set_enabled(value == "on")
+        return CommandResult(output=f"frame aggregation: {value}")
 
     def _cmd_quit(self, args: list[str]) -> CommandResult:
         if args:

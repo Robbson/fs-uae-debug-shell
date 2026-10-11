@@ -8,6 +8,7 @@ import os
 import sys
 from pathlib import Path
 
+from .aggregate import AggregatedFrame, FrameAggregator, format_frame_line
 from .commands import (
     ARGUMENT_CHOICES,
     COMMANDS,
@@ -32,8 +33,11 @@ class Application:
         self.config = config
         self.session = Session(config.executable, config.fsuae_args)
         self.parser = DebuggerOutputParser()
-        self.output = OutputRouter(base_dir=Path.cwd())
         self.frames = FrameValueSelector()
+        self.aggregate = FrameAggregator()
+        self.output = OutputRouter(
+            base_dir=Path.cwd(), columns=self.aggregate.columns
+        )
         if console is not None:
             self.console = console
         else:
@@ -48,6 +52,7 @@ class Application:
             prefix=config.prefix,
             output=self.output,
             frames=self.frames,
+            aggregate=self.aggregate,
             status_provider=self._status_text,
         )
 
@@ -176,8 +181,25 @@ class Application:
             self._process_events([event], out)
 
     def _emit_hit(self, piece: Piece, out: list[str]) -> None:
-        """Display and log a selected watchpoint hit."""
+        """Display and log a selected watchpoint hit.
 
+        With frame aggregation enabled and a frame counter present, the hit is
+        buffered and emitted later as one condensed row per frame; otherwise it
+        is shown and logged unchanged.
+        """
+
+        event = piece.event
+        if event is None or event.hit is None:
+            return
+        hit = event.hit
+        self.aggregate.add_columns((hit.watchpoint,))
+        if self.aggregate.enabled and hit.frame is not None:
+            for aggregated in self.aggregate.select(piece):
+                self._emit_aggregate(aggregated, out)
+            return
+        self._emit_raw_hit(piece, out)
+
+    def _emit_raw_hit(self, piece: Piece, out: list[str]) -> None:
         event = piece.event
         if event is None or event.hit is None:
             return
@@ -185,9 +207,22 @@ class Application:
             out.append(piece.text)
         self._on_hit(event.hit, out)
 
+    def _emit_aggregate(self, aggregated: AggregatedFrame, out: list[str]) -> None:
+        """Show and log one condensed frame row."""
+
+        if self.output.display_enabled:
+            line = format_frame_line(
+                aggregated.frame, aggregated.values, self.aggregate.columns()
+            )
+            out.append(line + "\n")
+        if self.output.log_enabled:
+            self._on_frame(aggregated, out)
+
     def _flush_frames(self, out: list[str]) -> None:
         for piece in self.frames.flush():
             self._emit_hit(piece, out)
+        for aggregated in self.aggregate.flush():
+            self._emit_aggregate(aggregated, out)
 
     def _flush_pending_frames(self) -> None:
         out: list[str] = []
@@ -213,6 +248,7 @@ class Application:
                 self._prompt_ready.set()
             elif event.type is EventType.WATCHPOINT_DEFINED and event.definition is not None:
                 definition = event.definition
+                self.aggregate.add_columns((definition.watchpoint,))
                 self._definitions[definition.watchpoint] = (
                     f"{definition.start:08X}-{definition.end:08X} "
                     f"({definition.length}) {definition.access} {definition.scope}"
@@ -226,6 +262,23 @@ class Application:
             log.error("%s", exc)
             message = (
                 f"\n[wrapper] error: failed to log watchpoint {hit.watchpoint}: {exc}\n"
+            )
+            if out is None:
+                self._write(message)
+            else:
+                out.append(message)
+            return
+        if self.output.log_enabled:
+            self.console.refresh()
+
+    def _on_frame(self, aggregated: AggregatedFrame, out: list[str] | None = None) -> None:
+        self.state = SessionState.STOPPED
+        try:
+            self.output.record_frame(aggregated.frame, aggregated.values)
+        except EventLogError as exc:
+            log.error("%s", exc)
+            message = (
+                f"\n[wrapper] error: failed to log frame {aggregated.frame}: {exc}\n"
             )
             if out is None:
                 self._write(message)
@@ -273,6 +326,7 @@ class Application:
             f"fs-uae: {self.config.executable} {args}".rstrip(),
             f"output: {self.output.mode.value}",
             f"frame values: {self.frames.mode.value}",
+            f"frame aggregation: {'on' if self.aggregate.enabled else 'off'}",
         ]
         name = self.output.display_name()
         if not self.output.created:

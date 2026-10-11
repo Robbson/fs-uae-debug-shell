@@ -8,6 +8,7 @@ Add a short entry under `Unreleased` for every completed feature or behavioural 
 
 ### Added
 
+- `:frameagg on|off` (default `on`) condenses the selected hits of each video frame into one row that keeps only the frame counter, the watchpoint ids, and their values, for both the terminal and the CSV log. The CSV log uses a wide per-frame schema (`timestamp,frame,wp1,wp2,...`) with one column per watchpoint and an empty cell for a watchpoint that did not write in the frame; the classic output without a frame counter ignores the setting.
 - `:framevalues first|last|all` to choose which write of each video frame and watchpoint is shown and logged for FS-UAE's enhanced hit output (which carries a frame counter); the default is `first`, and the classic output without a frame counter ignores the setting.
 - `prompt_toolkit`-based interactive input line with cursor movement (Left/Right), Home/End, Backspace/Delete, and in-memory command history; debugger output is rendered above the prompt with `patch_stdout()`, so asynchronous output cannot corrupt the line being typed.
 - Tab completion for shell command names and their parameters (`:output` choices, `:logfile` paths).
@@ -24,6 +25,7 @@ Add a short entry under `Unreleased` for every completed feature or behavioural 
 - In `log` mode the prompt and its status line stay up while the game runs, so the per-watchpoint counter remains visible and updates on every logged hit; the hit block is hidden there, so nothing needs repainting.
 - Output from a single PTY read is written to the terminal in one batch rather than one write per parsed line.
 - CSV timestamps no longer carry a timezone offset, and the `watchpoint` column is now headed `wp`.
+- The CSV log now has two schemas: the per-hit `timestamp,frame,wp,address,size,access,value,pc` schema, and, with `:frameagg on`, a wide per-frame `timestamp,frame,wp1,wp2,...` schema. The schema is fixed when the file is created, so changing the output shape while a file is open starts a new file.
 
 ### Fixed
 

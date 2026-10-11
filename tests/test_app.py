@@ -131,6 +131,7 @@ class OutputRoutingTests(unittest.TestCase):
     def test_enhanced_hit_shown_in_shell_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = make_app(self, tmp)
+            app.aggregate.set_enabled(False)
             app._consume_output(ENHANCED_HIT_LINE + "\n" + DUMP + ">")
             assert isinstance(app.console, FakeConsole)
             self.assertIn(ENHANCED_HIT_LINE, app.console.data)
@@ -207,6 +208,7 @@ class OutputRoutingTests(unittest.TestCase):
             text = app._status_text()
             self.assertIn("output: both", text)
             self.assertIn("frame values: first", text)
+            self.assertIn("frame aggregation: on", text)
             self.assertIn("logged events: 1", text)
             self.assertIn("game.csv", text)
             self.assertIn("debugger watchpoints:", text)
@@ -224,6 +226,7 @@ class FrameValueTests(unittest.TestCase):
     def test_default_first_filters_terminal_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = make_app(self, tmp)
+            app.aggregate.set_enabled(False)
             app._consume_output(ENHANCED_FRAMES)
             app._flush_pending_frames()
             assert isinstance(app.console, FakeConsole)
@@ -237,6 +240,7 @@ class FrameValueTests(unittest.TestCase):
     def test_all_mode_shows_every_hit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = make_app(self, tmp)
+            app.aggregate.set_enabled(False)
             app.frames.set_mode(FrameValueMode.ALL)
             app._consume_output(ENHANCED_FRAMES)
             shown = [
@@ -279,6 +283,81 @@ class FrameValueTests(unittest.TestCase):
                 line for line in app.console.data.splitlines() if "Memwatch" in line
             ]
             self.assertEqual(len(shown), 2)
+
+
+class FrameAggregationTests(unittest.TestCase):
+    """One condensed row per frame, keeping only watchpoint ids and values."""
+
+    def test_default_on_condenses_each_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._consume_output(ENHANCED_FRAMES)
+            app._flush_pending_frames()
+            assert isinstance(app.console, FakeConsole)
+            self.assertIn("00000164 01:00000003 02:00000093", app.console.data)
+            self.assertIn("00000165 01:         02:00000094", app.console.data)
+            self.assertIn("00000166 01:         02:0000008D", app.console.data)
+            self.assertNotIn("Memwatch", app.console.data)
+
+    def test_log_mode_writes_wide_csv_with_empty_cell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app.output.set_mode(OutputMode.LOG)
+            app._consume_output(ENHANCED_FRAMES)
+            app._flush_pending_frames()
+            lines = (Path(tmp) / "game.csv").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(lines[0], "timestamp,frame,wp1,wp2")
+            rows = [line.split(",") for line in lines[1:]]
+            self.assertEqual(len(rows), 3)
+            self.assertEqual(rows[0][1:], ["164", "0x00000003", "0x00000093"])
+            self.assertEqual(rows[1][1:], ["165", "", "0x00000094"])
+            self.assertEqual(rows[2][1:], ["166", "", "0x0000008D"])
+            assert isinstance(app.console, FakeConsole)
+            self.assertEqual(app.console.data, "")
+
+    def test_frameagg_off_shows_raw_hits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app.aggregate.set_enabled(False)
+            app._consume_output(ENHANCED_FRAMES)
+            shown = [
+                line for line in app.console.data.splitlines() if "Memwatch" in line
+            ]
+            self.assertEqual(len(shown), 4)
+
+    def test_classic_output_ignores_aggregation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            text = (
+                "Memwatch 0: break at 00000574.W  W  0000005B PC=0000C28C CPUDW (000)\n"
+                "Memwatch 0: break at 00000574.W  W  0000005C PC=0000C28C CPUDW (000)\n"
+            )
+            app._consume_output(text)
+            shown = [
+                line for line in app.console.data.splitlines() if "Memwatch" in line
+            ]
+            self.assertEqual(len(shown), 2)
+
+    def test_watchpoint_definitions_seed_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._process_events(
+                [
+                    parse_line(" 0: 00000574 - 00000575 (2)  W  CPU"),
+                    parse_line(" 1: 00000576 - 00000577 (2)  W  CPU"),
+                ]
+            )
+            self.assertEqual(app.aggregate.columns(), [0, 1])
+
+    def test_logging_failure_for_aggregated_frame_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app.output.set_mode(OutputMode.LOG)
+            app.output.set_logfile(str(Path(tmp) / "missing" / "game.csv"))
+            app._consume_output(ENHANCED_FRAMES)
+            app._flush_pending_frames()
+            assert isinstance(app.console, FakeConsole)
+            self.assertIn("failed to log frame", app.console.data)
 
 
 class InputHandlingTests(unittest.TestCase):

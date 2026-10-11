@@ -15,7 +15,7 @@ The shell launches FS-UAE as a child process on a pseudo-terminal (PTY) and owns
 
  fs-uae ──▶ Session (PTY) ─▶ Application ─┬─▶ Console (patch_stdout + status line)
                                           └─▶ DebuggerOutputParser ─▶ events
-                                                                       └─▶ FrameValueSelector ─▶ OutputRouter ─▶ CsvEventWriter
+                                                                       └─▶ FrameValueSelector ─▶ FrameAggregator ─▶ OutputRouter ─▶ CsvEventWriter
 ```
 
 ## Modules
@@ -30,9 +30,10 @@ The shell launches FS-UAE as a child process on a pseudo-terminal (PTY) and owns
 | `src/fs_uae_debug_shell/terminal.py` | Interactive prompt via `prompt_toolkit`: line editing/history, completion (`WrapperCompleter`), `patch_stdout` output and the status line (`Console`). |
 | `src/fs_uae_debug_shell/parser.py` | Incremental debugger output parser and event types. |
 | `src/fs_uae_debug_shell/frames.py` | Per-frame selection of watchpoint hits (`FrameValueMode`, `FrameValueSelector`). |
+| `src/fs_uae_debug_shell/aggregate.py` | Per-frame condensation of hits into one row (`FrameAggregator`, `AggregatedFrame`). |
 | `src/fs_uae_debug_shell/commands.py` | Shell command parsing, dispatch, and the completion tables. |
 | `src/fs_uae_debug_shell/output.py` | Output routing: `OutputMode`, log-file naming, lazy CSV creation, per-watchpoint counters. |
-| `src/fs_uae_debug_shell/eventlog.py` | Append-only CSV event writer. |
+| `src/fs_uae_debug_shell/eventlog.py` | Append-only CSV event writer for the per-hit and per-frame schemas. |
 
 `eventlog.py` is named to avoid shadowing the Python standard-library `logging` module (see [`decisions.md`](decisions.md)).
 
@@ -41,7 +42,7 @@ The shell launches FS-UAE as a child process on a pseudo-terminal (PTY) and owns
 1. `Session.start` spawns FS-UAE on a PTY with child echo disabled.
 2. `Application._run_async` registers the child PTY fd with `loop.add_reader` and enters `Console.patched_stdout()`.
 3. Child output: the reader callback decodes the text and passes it to `DebuggerOutputParser.feed_pieces`, which returns `Piece`s in order (the exact text plus any structured `Event`). Everything produced by one read is written to the terminal in a single `Console.write` call.
-4. `Application._handle_piece` routes each piece. Watchpoint hits pass through `FrameValueSelector`, which keeps the chosen value per frame and watchpoint (`:framevalues`); the selected hits are shown and/or logged according to `OutputRouter`. `_process_events` updates debugger definitions and tracks the prompt.
+4. `Application._handle_piece` routes each piece. Watchpoint hits pass through `FrameValueSelector`, which keeps the chosen value per frame and watchpoint (`:framevalues`); with `:frameagg` on and a frame counter present, the selected hits then pass through `FrameAggregator`, which condenses each frame into one row. The resulting hit or frame is shown and/or logged according to `OutputRouter`. `_process_events` updates debugger definitions and tracks the prompt.
 5. Input: `Console.prompt_async` returns one edited line. `Application` dispatches lines starting with the shell prefix to `CommandDispatcher`; everything else is written to the child PTY unchanged.
 
 The interactive prompt is only raised while the debugger is idle at its own `>` prompt (see below) — except in `log` mode, where it stays up for the status line — so the bulk of debugger output is written directly rather than repainted above a prompt.
@@ -83,9 +84,9 @@ The parser is incremental: it buffers partial lines across `feed_pieces()` calls
 - a user-supplied name that already exists gets an increasing numeric suffix;
 - per-watchpoint counters exist only for logged hits.
 
-`Application._on_hit` records the hit and, when logging, refreshes the status line. On a write failure the error is reported and the emulator is simply left stopped. Emulation is **never** resumed automatically; the user sends `g` (or any other command) themselves.
+`Application._on_hit` records a single hit and `_on_frame` records a condensed frame; both refresh the status line when logging. On a write failure the error is reported and the emulator is simply left stopped. Emulation is **never** resumed automatically; the user sends `g` (or any other command) themselves.
 
-`CommandDispatcher` provides `:output`, `:logfile`, and `:framevalues` to change those settings, plus `:help`, `:status`, and `:quit`.
+`CommandDispatcher` provides `:output`, `:logfile`, `:framevalues`, and `:frameagg` to change those settings, plus `:help`, `:status`, and `:quit`.
 
 ## Frame value selection
 
@@ -96,6 +97,14 @@ The enhanced hit line carries a leading video-frame counter. A single frame can 
 - `all` emits every hit.
 
 A hit without a frame counter (classic output) is always emitted and ignores the mode. The selector is flushed when a frame ends, when any other structured event arrives (for example the debugger prompt), and at shutdown, so a buffered frame is never lost.
+
+## Frame aggregation
+
+`FrameAggregator` (`aggregate.py`) sits after the value selector and condenses the selected hits of a video frame into one `AggregatedFrame` that keeps only the watchpoint ids and their values. It buffers hits by frame and emits a row when the frame number changes; `Application` flushes it whenever another structured event arrives and at shutdown, in step with the value selector. `format_frame_line` renders the row as `<frame> <wp>:<value> <wp>:<value> ...`; every watchpoint column is printed, so a watchpoint that did not write keeps its padding as blanks.
+
+The columns are the watchpoint ids the wrapper knows about: ids from parsed `Memwatch` definitions (seeded through `_process_events`) plus ids seen in hits (added in `Application._emit_hit`). A watchpoint first seen after the log file was created cannot fit the frozen header and is reported as a logging error.
+
+`:frameagg` (default `on`) is exposed by `CommandDispatcher` and only applies to hits that carry a frame counter; classic hits and a disabled aggregator emit the original hit piece unchanged. The classic per-hit CSV schema and the wide per-frame schema are chosen by which record method the application calls (`OutputRouter.record` versus `record_frame`); `CsvEventWriter` carries the matching header and rejects records of the other shape.
 
 ## Interactive input
 

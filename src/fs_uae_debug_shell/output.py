@@ -57,9 +57,11 @@ class OutputRouter:
         self,
         base_dir: Path,
         now: Callable[[], datetime] | None = None,
+        columns: Callable[[], list[int]] | None = None,
     ) -> None:
         self._base_dir = Path(base_dir)
         self._now = now if now is not None else datetime.now
+        self._columns = columns if columns is not None else list
         self._mode = OutputMode.SHELL
         self._user_name: str | None = None
         self._default_name: str | None = None
@@ -124,9 +126,23 @@ class OutputRouter:
 
         if not self.log_enabled:
             return
-        writer = self._ensure_writer()
-        writer.append(hit)
+        writer = self._ensure_writer(aggregated=False)
+        writer.append(hit, timestamp=self._now())
         self._counts[hit.watchpoint] = self._counts.get(hit.watchpoint, 0) + 1
+
+    def record_frame(self, frame: int, values: dict[int, int]) -> None:
+        """Append an aggregated *frame* to the log file when logging is enabled.
+
+        One row is written per frame, with a column per watchpoint.  Raises
+        :class:`EventLogError` if the file cannot be opened or written.
+        """
+
+        if not self.log_enabled:
+            return
+        writer = self._ensure_writer(aggregated=True)
+        writer.append_frame(frame, values, timestamp=self._now())
+        for watchpoint in values:
+            self._counts[watchpoint] = self._counts.get(watchpoint, 0) + 1
 
     def counts(self) -> dict[int, int]:
         return dict(self._counts)
@@ -150,11 +166,18 @@ class OutputRouter:
             self._default_name = default_logfile_name(self._now())
         return self._base_dir / self._default_name
 
-    def _ensure_writer(self) -> CsvEventWriter:
+    def _ensure_writer(self, aggregated: bool) -> CsvEventWriter:
         if self._writer is not None:
-            return self._writer
+            if self._writer.aggregated == aggregated:
+                return self._writer
+            # The record shape changed (for example :frameagg was toggled while
+            # logging): start a fresh file with the matching schema so rows and
+            # header stay consistent.
+            self._close_writer()
+            self._counts.clear()
         path = _unique_path(self._base_path())
-        writer = CsvEventWriter(path)
+        columns = self._columns() if aggregated else None
+        writer = CsvEventWriter(path, columns=columns)
         self._writer = writer
         self._path = path
         return writer

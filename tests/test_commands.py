@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from fs_uae_debug_shell.aggregate import FrameAggregator
 from fs_uae_debug_shell.commands import CommandDispatcher
 from fs_uae_debug_shell.frames import FrameValueSelector
 from fs_uae_debug_shell.output import OutputMode, OutputRouter
@@ -20,6 +21,7 @@ def make_dispatcher(case: unittest.TestCase, tmp: str) -> tuple[CommandDispatche
         prefix=":",
         output=router,
         frames=FrameValueSelector(),
+        aggregate=FrameAggregator(),
         status_provider=status,
     )
     return dispatcher, router
@@ -42,6 +44,7 @@ class CommandDispatcherTests(unittest.TestCase):
             self.assertIn("output", result.output)
             self.assertIn("logfile", result.output)
             self.assertIn("framevalues", result.output)
+            self.assertIn("frameagg", result.output)
 
     def test_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -158,6 +161,41 @@ class CommandDispatcherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             dispatcher, _ = make_dispatcher(self, tmp)
             result = dispatcher.dispatch(":framevalues first last")
+            self.assertFalse(result.ok)
+
+    def test_frameagg_reports_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":frameagg")
+            self.assertTrue(result.ok)
+            self.assertEqual(result.output, "frame aggregation: on")
+
+    def test_frameagg_sets_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            for value in ("off", "on", "off"):
+                result = dispatcher.dispatch(f":frameagg {value}")
+                self.assertTrue(result.ok, result.output)
+                self.assertEqual(result.output, f"frame aggregation: {value}")
+                self.assertEqual(dispatcher.aggregate.enabled, value == "on")
+
+    def test_frameagg_is_case_insensitive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":frameagg OFF")
+            self.assertTrue(result.ok)
+            self.assertFalse(dispatcher.aggregate.enabled)
+
+    def test_frameagg_invalid_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":frameagg maybe")
+            self.assertFalse(result.ok)
+
+    def test_frameagg_too_many_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":frameagg on off")
             self.assertFalse(result.ok)
 
     def test_quit(self) -> None:

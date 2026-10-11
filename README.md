@@ -54,6 +54,7 @@ The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.r
 | `:output shell\|log\|both` | Route all watchpoint hits (default: `shell`). |
 | `:logfile <file>` | Set the CSV log file name. |
 | `:framevalues first\|last\|all` | Keep which write of each frame per watchpoint (default: `first`; ignored for classic output). |
+| `:frameagg on\|off` | Condense each frame into one row of watchpoint values (default: `on`). |
 | `:quit` | Stop the emulator and exit the shell. |
 
 ## Output routing
@@ -94,6 +95,25 @@ The classic hit output has no frame counter, so `:framevalues` is ignored there 
 
 `first` keeps `00000003`, `00000093`, `00000094`, and `0000008D`; `last` keeps `00000003`, `00000093`, `0000008E`, and `00000088`; `all` keeps every line.
 
+## Frame aggregation (enhanced output)
+
+FS-UAE's enhanced hit output is a stream of one full `Memwatch` line per write. `:frameagg` (default `on`) offers an alternative, condensed view that keeps only the frame counter, the watchpoint ids, and their values; address, size, access, PC, and trailer are dropped. All the hits of a frame become one row, with one column per watchpoint, so the table grows wider as watchpoints are added:
+
+```text
+00000969 01:00000029 02:00000067
+00000970 01:0000002C 02:00000068
+```
+
+A watchpoint that did not write in a frame keeps its column but leaves it blank, so a stale value can never be mistaken for a fresh one:
+
+```text
+00000969 01:         02:00000067
+```
+
+The same view shapes the CSV log (see below): one row per frame with one `wp<n>` column per watchpoint and an empty cell for a watchpoint that did not write.
+
+Columns are the watchpoints the wrapper knows about — those defined with `w` (the debugger's `Memwatch breakpoint enabled` definition lines) plus any seen in a hit. Define your watchpoints before you start logging; a watchpoint that first appears after the aggregation header has been written is reported as a logging error and needs a new `:logfile`. `:frameagg` applies only to the enhanced output that carries a frame counter; the classic output without one is passed through unchanged. `:framevalues` still chooses which write of each frame and watchpoint is kept before aggregation.
+
 ## Watchpoint logging workflow
 
 Watchpoints are created with the native debugger command `w` (see the debugger's own `help`). The wrapper only *observes* them:
@@ -121,6 +141,8 @@ A watchpoint hit stops the emulator at the debugger prompt, exactly as the nativ
 
 CSV, UTF-8, append-only. A header row is written when the file is created or empty. Records are flushed immediately.
 
+By default (one row per hit) the schema is:
+
 ```text
 timestamp,frame,wp,address,size,access,value,pc
 2026-10-10T21:14:35.165,25,0,0x00000574,W,W,0x00000080,0x0000C28C
@@ -136,6 +158,16 @@ timestamp,frame,wp,address,size,access,value,pc
 | `access` | Access type as printed by the debugger (`R`/`W`/`I`/`F`/`C`). |
 | `value` | Value printed by the debugger (hex). |
 | `pc` | Program counter at the break (hex). |
+
+With `:frameagg on` and enhanced output, the file uses the wide frame-aggregation schema instead: one row per frame and one column per watchpoint. A watchpoint that did not write in a frame gets an empty cell.
+
+```text
+timestamp,frame,wp1,wp2
+2026-10-12T00:31:26.549,184,0x0000001D,0x00000060
+2026-10-12T00:31:26.569,185,,0x00000061
+```
+
+The schema is fixed when the file is created, so toggling `:frameagg` (or switching between classic and enhanced output) while a file is open starts a new file on the next record.
 
 Only fields present in the debugger's `Memwatch ...` line are recorded; the wrapper never fabricates values.
 
@@ -160,11 +192,11 @@ Unit tests (no emulator required):
 uv run python -m unittest discover -s tests
 ```
 
-They cover parsing (including partial/multi-line output), per-frame hit selection, command dispatch and completion, output routing and log-file naming, CSV creation/append/error handling, console input state, and child-output handling. Parser tests use real captured output in `tests/fixtures/`.
+They cover parsing (including partial/multi-line output), per-frame hit selection and frame aggregation, command dispatch and completion, output routing and log-file naming, CSV creation/append/error handling (both schemas), console input state, and child-output handling. Parser tests use real captured output in `tests/fixtures/`.
 
 ### Checks
 
-- `uv run python -m unittest discover -s tests` — 121 tests, all passing.
+- `uv run python -m unittest discover -s tests` — 154 tests, all passing.
 - `uvx ruff check .` — clean.
 - No type checker (mypy/pyright) is configured in this project.
 
@@ -172,5 +204,6 @@ They cover parsing (including partial/multi-line output), per-frame hit selectio
 
 - Only output formats confirmed against FS-UAE 3.3.0 or higher are parsed. Other versions or WinUAE differ.
 - Watchpoints are created with the native `w` command; the wrapper does not create them for you.
+- Frame aggregation needs FS-UAE's enhanced hit output (the leading frame counter); the classic output is passed through unchanged. Its CSV columns are fixed when the file is created, so define watchpoints before logging.
 - In `log` mode watchpoint output is intentionally hidden from the terminal; use `:output both` to see it as well. The prompt stays up while the game runs there so the status line is always visible; FS-UAE does not read console input while running, so typing while it is not halted has no effect.
 - Command history is kept in memory for the current session; it is not persisted across runs.
