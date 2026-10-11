@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,13 +9,15 @@ from fs_uae_debug_wrapper.app import Application
 from fs_uae_debug_wrapper.config import AppConfig
 from fs_uae_debug_wrapper.eventlog import EventLogError
 from fs_uae_debug_wrapper.parser import DebuggerOutputParser, EventType, parse_line
+from fs_uae_debug_wrapper.session import SessionState
 
 HIT_LINE = "Memwatch 0: break at 00000574.W  W  0000005B PC=0000C28C CPUDW (000)"
 
 
 class FakeSession:
-    def __init__(self) -> None:
+    def __init__(self, fd: int = -1) -> None:
         self.sent: list[bytes] = []
+        self._fd = fd
 
     def send_bytes(self, data: bytes) -> None:
         self.sent.append(data)
@@ -27,21 +30,32 @@ class FakeSession:
 
     @property
     def fd(self) -> int:
-        return -1
+        return self._fd
 
 
-class FakeTerminal:
+class FakeConsole:
     def __init__(self) -> None:
-        self.data = b""
+        self.data = ""
+        self.typed = ""
+        self.cancelled = False
 
-    def write(self, data: bytes) -> None:
-        self.data += data
+    def write(self, text: str) -> None:
+        self.data += text
+
+    def input_pending(self) -> bool:
+        return bool(self.typed)
+
+    def cancel(self) -> None:
+        self.cancelled = True
 
 
 def make_app(case: unittest.TestCase, tmp: str) -> Application:
-    app = Application(AppConfig(fsuae_args=["--load_state=2", "cfg.fs-uae"]))
+    console = FakeConsole()
+    app = Application(
+        AppConfig(fsuae_args=["--load_state=2", "cfg.fs-uae"]),
+        console=console,  # type: ignore[arg-type]
+    )
     app.session = FakeSession()  # type: ignore[assignment]
-    app._terminal = FakeTerminal()  # type: ignore[assignment]
     case.addCleanup(app.watchpoints.close)
     return app
 
@@ -103,8 +117,8 @@ class ResumeDecisionTests(unittest.TestCase):
             app._process_events([prompt_event()])
             assert isinstance(app.session, FakeSession)
             self.assertEqual(app.session.sent, [])
-            assert isinstance(app._terminal, FakeTerminal)
-            self.assertIn(b"failed to log", app._terminal.data)
+            assert isinstance(app.console, FakeConsole)
+            self.assertIn("failed to log", app.console.data)
 
     def test_manual_activation_does_not_resume(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -120,7 +134,8 @@ class ResumeDecisionTests(unittest.TestCase):
             app = make_app(self, tmp)
             app.watchpoints.enable(0, "score.csv", base_dir=Path(tmp))
             app._process_events([hit_event()])
-            app._editor.buffer.extend(b"m")
+            assert isinstance(app.console, FakeConsole)
+            app.console.typed = "m"
             app._process_events([prompt_event()])
             assert isinstance(app.session, FakeSession)
             self.assertEqual(app.session.sent, [])
@@ -140,7 +155,7 @@ class ResumeDecisionTests(unittest.TestCase):
             app.watchpoints.enable(0, "score.csv", base_dir=Path(tmp))
             app._process_events([hit_event()])
             self.assertTrue(app._pending_resume)
-            app._handle_line(app._terminal, b"r")  # type: ignore[arg-type]
+            app._handle_line("r")
             self.assertFalse(app._pending_resume)
             app._process_events([prompt_event()])
             assert isinstance(app.session, FakeSession)
@@ -160,31 +175,31 @@ class InputHandlingTests(unittest.TestCase):
     def test_wrapper_command_not_forwarded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = make_app(self, tmp)
-            app._handle_line(app._terminal, b":status")  # type: ignore[arg-type]
+            app._handle_line(":status")
             assert isinstance(app.session, FakeSession)
             self.assertEqual(app.session.sent, [])
 
     def test_native_command_forwarded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = make_app(self, tmp)
-            app._handle_line(app._terminal, b"r")  # type: ignore[arg-type]
+            app._handle_line("r")
             assert isinstance(app.session, FakeSession)
             self.assertEqual(app.session.sent, [b"r\n"])
 
     def test_quit_sets_stopping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = make_app(self, tmp)
-            app._handle_line(app._terminal, b":quit")  # type: ignore[arg-type]
+            app._handle_line(":quit")
             self.assertTrue(app._stopping)
 
     def test_prompt_redrawn_after_wrapper_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = make_app(self, tmp)
             app._process_events([prompt_event()])
-            app._handle_line(app._terminal, b":status")  # type: ignore[arg-type]
-            assert isinstance(app._terminal, FakeTerminal)
+            app._handle_line(":status")
+            assert isinstance(app.console, FakeConsole)
             assert isinstance(app.session, FakeSession)
-            self.assertTrue(app._terminal.data.endswith(b">"))
+            self.assertTrue(app.console.data.endswith(">"))
             self.assertEqual(app.session.sent, [])
             self.assertTrue(app._at_prompt)
 
@@ -192,8 +207,60 @@ class InputHandlingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             app = make_app(self, tmp)
             app._process_events([prompt_event()])
-            app._handle_line(app._terminal, b"r")  # type: ignore[arg-type]
+            app._handle_line("r")
             self.assertFalse(app._at_prompt)
+
+    def test_raw_input_forwarded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._forward_raw(b"\x03")
+            assert isinstance(app.session, FakeSession)
+            self.assertEqual(app.session.sent, [b"\x03"])
+
+    def test_child_close_stops_and_cancels_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._stop_from_child()
+            self.assertTrue(app._stopping)
+            assert isinstance(app.console, FakeConsole)
+            self.assertTrue(app.console.cancelled)
+
+
+class ChildReaderTests(unittest.TestCase):
+    def test_child_output_forwarded_and_parsed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            read_fd, write_fd = os.pipe()
+            self.addCleanup(os.close, read_fd)
+            self.addCleanup(os.close, write_fd)
+            assert isinstance(app.session, FakeSession)
+            app.session._fd = read_fd
+            os.write(write_fd, (HIT_LINE + "\n").encode("latin-1"))
+            app._on_child_readable()
+            assert isinstance(app.console, FakeConsole)
+            self.assertIn(HIT_LINE, app.console.data)
+            self.assertEqual(app.state, SessionState.STOPPED)
+
+    def test_child_eof_stops_and_cancels_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            read_fd, write_fd = os.pipe()
+            self.addCleanup(os.close, read_fd)
+            assert isinstance(app.session, FakeSession)
+            app.session._fd = read_fd
+            os.close(write_fd)
+            app._on_child_readable()
+            self.assertTrue(app._stopping)
+            assert isinstance(app.console, FakeConsole)
+            self.assertTrue(app.console.cancelled)
+
+    def test_reader_ignored_after_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._stopping = True
+            app._on_child_readable()
+            assert isinstance(app.console, FakeConsole)
+            self.assertEqual(app.console.data, "")
 
 
 if __name__ == "__main__":

@@ -26,6 +26,8 @@ Why the FS-UAE Debug Wrapper is built the way it is.  Each record captures the c
 
 **Consequences.** The control flow stays simple and debuggable, and there are no locks or thread-safety concerns.  `SIGWINCH` is reduced to a flag that is applied between loop iterations.
 
+**Superseded by ADR-0009** (the input prompt now runs on an `asyncio` loop).
+
 ## ADR-0004: Disable child echo and do local line editing
 
 **Context.** In a plain FS-UAE session the PTY has kernel echo enabled, so typed commands are echoed back.  If the wrapper also echoed, input would appear twice, and intercepted `:` commands would still reach the emulator's echo.
@@ -33,6 +35,8 @@ Why the FS-UAE Debug Wrapper is built the way it is.  Each record captures the c
 **Decision.** Spawn FS-UAE with `echo=False` and put the controlling terminal into raw input mode, doing local echo and backspace handling in `LineEditor`.
 
 **Consequences.** Input is shown exactly once and `:` commands never reach the emulator.  Because the debugger has no readline-style editing, local editing is limited to printable input and backspace; Ctrl-C/Ctrl-D are forwarded as raw bytes.
+
+**Superseded by ADR-0009** for the line-editing part; child echo stays disabled.
 
 ## ADR-0005: Parse only confirmed FS-UAE 3.2.35 output
 
@@ -65,3 +69,11 @@ Why the FS-UAE Debug Wrapper is built the way it is.  Each record captures the c
 **Decision.** Name the CSV writer module `eventlog.py`.
 
 **Consequences.** Import resolution stays unambiguous and readers are not misled into expecting standard-library logging behaviour.
+
+## ADR-0009: `prompt_toolkit` for interactive input
+
+**Context.** The original input layer was a hand-written raw-mode line editor that only understood printable input and backspace.  Practical editing (cursor movement, Home/End, Delete) and command history were missing, and asynchronous debugger output could disturb the line being typed.
+
+**Decision.** Provide the input line with `prompt_toolkit`'s `PromptSession`, driven by an `asyncio` loop.  The child PTY is read with `loop.add_reader` and its output is rendered above the prompt with `patch_stdout(raw=True)`; `Console` in `terminal.py` wraps this.  `pexpect` keeps ownership of the child PTY.  This supersedes ADR-0003 and the line-editing part of ADR-0004.
+
+**Consequences.** Cursor movement, Home/End, Backspace/Delete, and Up/Down history come from prompt_toolkit's default key bindings; history is in-memory for the session only.  The wrapper now depends on `prompt_toolkit` and uses `asyncio` for its input loop (the demonstrated need required by AGENTS.md).  Only prompt_toolkit reads stdin, so there is no competing read of the terminal.

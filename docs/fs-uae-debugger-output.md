@@ -68,4 +68,4 @@ A hit is followed by the same register dump / disassembly / `Next PC` block as a
 
 ## Terminal echo
 
-In a plain FS-UAE session the child PTY has kernel echo enabled, so typed commands are echoed back (`>r`, `>g`, ...).  The wrapper disables child echo and performs its own local echo so that intercepted `:` commands are never echoed by the emulator and commands are not shown twice.
+In a plain FS-UAE session the child PTY has kernel echo enabled, so typed commands are echoed back (`>r`, `>g`, ...).  The wrapper disables child echo (`pexpect` is spawned with `echo=False`) and does its own local echo through `prompt_toolkit`, so intercepted `:` commands are never echoed by the emulator and commands are not shown twice.

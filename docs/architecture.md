@@ -4,16 +4,16 @@ How the FS-UAE Debug Wrapper is structured. For the reasoning behind these choic
 
 ## Overview
 
-The wrapper launches FS-UAE as a child process on a pseudo-terminal (PTY) and owns that console for its whole lifetime.  A single-threaded event loop watches the terminal and the child PTY with `select()` and multiplexes between them:
+The wrapper launches FS-UAE as a child process on a pseudo-terminal (PTY) and owns that console for its whole lifetime.  The interactive input line is provided by `prompt_toolkit`; one `asyncio` event loop multiplexes that prompt with reading the child PTY:
 
-- output read from the child is forwarded to the terminal verbatim and fed to an incremental parser that emits structured events;
-- input read from the terminal is decoded by a line editor and then either dispatched as a wrapper command or forwarded to FS-UAE unchanged.
+- output read from the child is written to the console and fed to an incremental parser that emits structured events;
+- lines read from the prompt are either dispatched as a wrapper command or forwarded to FS-UAE unchanged.
 
 ```
-keyboard ─▶ Terminal / LineEditor ─▶ Application ─┬─▶ CommandDispatcher ─▶ WatchpointManager
-                                                   └─▶ Session (PTY) ──────▶ fs-uae
+ keyboard ─▶ Console (prompt_toolkit) ─▶ Application ─┬─▶ CommandDispatcher ─▶ WatchpointManager
+                                                     └─▶ Session (PTY) ──────▶ fs-uae
 
-fs-uae ──▶ Session (PTY) ─▶ Application ─┬─▶ Terminal (display)
+ fs-uae ──▶ Session (PTY) ─▶ Application ─┬─▶ Console (patch_stdout)
                                           └─▶ DebuggerOutputParser ─▶ events
                                                                        ├─▶ WatchpointManager ─▶ CsvEventWriter
                                                                        └─▶ resume decision
@@ -28,7 +28,7 @@ fs-uae ──▶ Session (PTY) ─▶ Application ─┬─▶ Terminal (display
 | `src/fs_uae_debug_wrapper/config.py` | `AppConfig` runtime configuration dataclass. |
 | `src/fs_uae_debug_wrapper/app.py` | Orchestration: event loop, state, resume decisions, wiring. |
 | `src/fs_uae_debug_wrapper/session.py` | FS-UAE process ownership over a `pexpect` PTY; `SessionState`. |
-| `src/fs_uae_debug_wrapper/terminal.py` | Raw terminal input, local echo/line editing, output forwarding. |
+| `src/fs_uae_debug_wrapper/terminal.py` | Interactive prompt via `prompt_toolkit`: line editing/history, `patch_stdout` output (`Console`). |
 | `src/fs_uae_debug_wrapper/parser.py` | Incremental debugger output parser and event types. |
 | `src/fs_uae_debug_wrapper/commands.py` | Wrapper command parsing and dispatch. |
 | `src/fs_uae_debug_wrapper/watchpoints.py` | Watchpoint id ↔ log file management. |
@@ -39,10 +39,10 @@ fs-uae ──▶ Session (PTY) ─▶ Application ─┬─▶ Terminal (display
 ## Data flow
 
 1. `Session.start` spawns FS-UAE on a PTY with child echo disabled.
-2. `Application._loop` uses `select()` on the terminal fd and the child PTY fd.
-3. Child output: bytes are written to the terminal, decoded as Latin-1, and passed to `DebuggerOutputParser.feed`, which returns a list of `Event`s.
+2. `Application._run_async` registers the child PTY fd with `loop.add_reader` and enters `Console.patched_stdout()`.
+3. Child output: the reader callback writes the decoded text to the console and passes it to `DebuggerOutputParser.feed`, which returns a list of `Event`s.
 4. `Application._process_events` reacts to events: it updates debugger definitions, tracks the prompt, handles watchpoint hits, and drives resume.
-5. Terminal input: `LineEditor.feed` turns bytes into `"line"` and `"raw"` events with local echo.  `Application` dispatches lines starting with the wrapper prefix to `CommandDispatcher`; everything else is written to the child PTY unchanged.
+5. Input: `Console.prompt_async` returns one edited line.  `Application` dispatches lines starting with the wrapper prefix to `CommandDispatcher`; everything else is written to the child PTY unchanged.
 
 ## State model
 
@@ -58,6 +58,8 @@ The application additionally tracks two internal flags:
 
 - `_at_prompt` — a prompt was seen and the debugger is awaiting a command.
 - `_pending_resume` — a configured, successfully logged hit is waiting for the prompt before `g` is sent.
+
+Whether the user has already typed something is delegated to `Console.input_pending()`, which reads the current `prompt_toolkit` buffer; automatic resume is skipped when it is non-empty.
 
 ## Debugger output parser
 
@@ -85,8 +87,9 @@ Unrelated stops (manual activation, breakpoints, exceptions) never set `_pending
 
 ## Concurrency
 
-The design is single-threaded and blocking-free during normal operation:
+The design uses one `asyncio` event loop:
 
-- `select()` with a 0.2 s timeout multiplexes terminal and child input.
-- `SIGWINCH` is captured in a handler that only sets a flag; the resize is applied at the top of the next loop iteration.
-- The terminal is put into raw mode (no canonical processing, no echo, no signals) so the wrapper can route input itself and keep `:` commands out of the emulator.  No asynchronous framework or extra threads are used.
+- `loop.add_reader` reads the child PTY as output arrives; `Console.prompt_async()` reads the input line.  Both run on the same loop, so no threads are needed.
+- `patch_stdout(raw=True)` renders child output above the active prompt, so asynchronous debugger output cannot corrupt the line being typed.
+- The child PTY is resized to the current terminal size before each prompt (`prompt_toolkit` owns the `SIGWINCH` handler while the prompt is active and repaints its own line).
+- `pexpect` keeps ownership of the child PTY (echo disabled); only `prompt_toolkit` reads stdin, so there is no competing read of the terminal.

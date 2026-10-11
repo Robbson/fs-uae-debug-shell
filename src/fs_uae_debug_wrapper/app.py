@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-import select
-import signal
 import sys
 from pathlib import Path
 
@@ -14,29 +13,27 @@ from .config import AppConfig
 from .eventlog import EventLogError
 from .parser import DebuggerOutputParser, Event, EventType, WatchpointHit
 from .session import Session, SessionError, SessionState
-from .terminal import InputEvent, LineEditor, Terminal
+from .terminal import Console
 from .watchpoints import WatchpointManager
 
 log = logging.getLogger("fs_uae_debug_wrapper")
 
 
 class Application:
-    """Wire the terminal, the FS-UAE session and the automation features."""
+    """Wire the console, the FS-UAE session and the automation features."""
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, console: Console | None = None) -> None:
         self.config = config
         self.session = Session(config.executable, config.fsuae_args)
         self.parser = DebuggerOutputParser()
         self.watchpoints = WatchpointManager()
+        self.console = console if console is not None else Console()
         self.auto_resume = config.auto_resume
         self.state = SessionState.RUNNING
         self._pending_resume = False
         self._at_prompt = False
         self._stopping = False
-        self._winch = False
         self._definitions: dict[int, str] = {}
-        self._terminal: Terminal | None = None
-        self._editor = LineEditor()
         self.dispatcher = CommandDispatcher(
             prefix=config.prefix,
             manager=self.watchpoints,
@@ -50,54 +47,44 @@ class Application:
 
     def run(self) -> int:
         try:
-            self.session.start(dimensions=Terminal.size())
+            return asyncio.run(self._run_async())
+        except KeyboardInterrupt:
+            return 0
+
+    async def _run_async(self) -> int:
+        try:
+            self.session.start(dimensions=Console.size())
         except SessionError as exc:
             log.error("%s", exc)
             return 2
 
         self._print_startup_banner()
-        previous_winch = signal.getsignal(signal.SIGWINCH)
-        signal.signal(signal.SIGWINCH, self._on_winch)
+        loop = asyncio.get_running_loop()
+        loop.add_reader(self.session.fd, self._on_child_readable)
         try:
-            with Terminal() as terminal:
-                self._terminal = terminal
-                self.session.set_dimensions(*Terminal.size())
-                self._loop(terminal)
+            with self.console.patched_stdout():
+                await self._input_loop()
         finally:
-            signal.signal(signal.SIGWINCH, previous_winch)
-            self._terminal = None
+            try:
+                loop.remove_reader(self.session.fd)
+            except (OSError, ValueError):
+                pass
             self._shutdown()
         return 0
 
-    def _loop(self, terminal: Terminal) -> None:
+    async def _input_loop(self) -> None:
         while not self._stopping and self.session.alive():
-            self._handle_winch()
+            self.session.set_dimensions(*Console.size())
             try:
-                readable, _, _ = select.select(
-                    [terminal.fd, self.session.fd], [], [], 0.2
-                )
-            except InterruptedError:
-                continue
-            except OSError as exc:
-                log.error("terminal select failed: %s", exc)
+                line = await self.console.prompt_async()
+            except EOFError:
                 break
-
-            if self.session.fd in readable:
-                data = self._read_child()
-                if not data:
-                    break
-                terminal.write(data)
-                self._process_events(self.parser.feed(data.decode("latin-1")))
-
-            if terminal.fd in readable:
-                try:
-                    incoming = terminal.read()
-                except OSError as exc:
-                    log.error("reading terminal input failed: %s", exc)
-                    break
-                if not incoming:
-                    break
-                self._handle_input(terminal, self._editor.feed(incoming, terminal.write))
+            except KeyboardInterrupt:
+                self._forward_raw(b"\x03")
+                continue
+            if self._stopping:
+                break
+            self._handle_line(line)
 
     def _shutdown(self) -> None:
         self.watchpoints.close()
@@ -105,11 +92,30 @@ class Application:
 
     # -- child output --------------------------------------------------------
 
-    def _read_child(self) -> bytes:
+    def _on_child_readable(self) -> None:
+        if self._stopping:
+            return
         try:
-            return os.read(self.session.fd, 65536)
+            fd = self.session.fd
+        except SessionError:
+            self._stop_from_child()
+            return
+        try:
+            data = os.read(fd, 65536)
+        except BlockingIOError:
+            return
         except OSError:
-            return b""
+            data = b""
+        if not data:
+            self._stop_from_child()
+            return
+        text = data.decode("latin-1")
+        self.console.write(text)
+        self._process_events(self.parser.feed(text))
+
+    def _stop_from_child(self) -> None:
+        self._stopping = True
+        self.console.cancel()
 
     def _process_events(self, events: list[Event]) -> None:
         for event in events:
@@ -166,7 +172,7 @@ class Application:
         if not self._pending_resume:
             return
         self._pending_resume = False
-        if self._editor.pending:
+        if self._input_pending():
             log.warning("auto-resume skipped: user input is pending")
             self._write(
                 "[wrapper] auto-resume skipped because you are typing; "
@@ -181,17 +187,12 @@ class Application:
         self._at_prompt = False
         self.state = SessionState.RUNNING
 
+    def _input_pending(self) -> bool:
+        return self.console.input_pending()
+
     # -- user input ----------------------------------------------------------
 
-    def _handle_input(self, terminal: Terminal, events: list[InputEvent]) -> None:
-        for event in events:
-            if event.kind == "raw":
-                self._forward_raw(event.data)
-                continue
-            self._handle_line(terminal, event.data)
-
-    def _handle_line(self, terminal: Terminal, raw_line: bytes) -> None:
-        text = raw_line.decode("utf-8", errors="replace")
+    def _handle_line(self, text: str) -> None:
         if self.dispatcher.handles(text):
             result: CommandResult = self.dispatcher.dispatch(text)
             self._write(f"\n[wrapper] {result.output}\n")
@@ -203,7 +204,7 @@ class Application:
         self._at_prompt = False
         self._pending_resume = False
         try:
-            self.session.send_bytes(raw_line + b"\n")
+            self.session.send_bytes(text.encode("utf-8", errors="replace") + b"\n")
         except SessionError as exc:
             log.error("forwarding command failed: %s", exc)
 
@@ -240,8 +241,7 @@ class Application:
         return "\n".join(lines)
 
     def _write(self, text: str) -> None:
-        if self._terminal is not None:
-            self._terminal.write(text.encode("utf-8", errors="replace"))
+        self.console.write(text)
 
     def _print_startup_banner(self) -> None:
         args = " ".join(self.config.fsuae_args)
@@ -253,14 +253,3 @@ class Application:
             "for wrapper commands.\n"
         )
         sys.stderr.flush()
-
-    # -- signals -------------------------------------------------------------
-
-    def _on_winch(self, _signum: int, _frame: object) -> None:
-        self._winch = True
-
-    def _handle_winch(self) -> None:
-        if not self._winch:
-            return
-        self._winch = False
-        self.session.set_dimensions(*Terminal.size())

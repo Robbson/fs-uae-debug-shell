@@ -64,7 +64,7 @@ When a configured watchpoint causes a break, the wrapper recognizes the event, p
 ## 4. Tooling and environment
 
 - Python, managed with `uv`.  Preserve the existing `pyproject.toml` and `uv.lock`; use `uv` for dependency management and for running the code.  Do not switch package managers.
-- Add dependencies only when clearly justified and explained; keep the set minimal.  `pexpect` is the only declared runtime dependency.
+- Add dependencies only when clearly justified and explained; keep the set minimal.  `pexpect` and `prompt_toolkit` are the only declared runtime dependencies.
 - Target Linux and a POSIX terminal; talk to FS-UAE through `pexpect` and a pseudo-terminal.
 - Primary target: the interactive FS-UAE 3.2.35 console debugger on Linux.
 - Use Python's standard `logging` for wrapper diagnostics.
@@ -90,7 +90,7 @@ Keep the implementation modular with clear boundaries between terminal handling,
 
 ## 7. Concurrency and state
 
-- Handle user input and debugger output concurrently with a straightforward design that works reliably with `pexpect` and POSIX terminals.  Do not add asynchronous frameworks or extra concurrency libraries without a demonstrated need.
+- Handle user input and debugger output concurrently with a straightforward design that works reliably with `pexpect` and POSIX terminals.  Interactive input is provided by `prompt_toolkit` (which runs on `asyncio`); do not add further asynchronous frameworks or concurrency libraries without a demonstrated need.
 - Debugger output can arrive in partial chunks, and one logical event may span several lines; parse incrementally.
 - A debugger prompt may appear before or after relevant output; automatic resume must not race with user input.
 - Use explicit, named states and transitions rather than implicit behaviour.

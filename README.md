@@ -31,6 +31,8 @@ FS-UAE starts the emulator normally.  The debugger is **not** active at startup,
 
 Wrapper-specific commands use the reserved prefix `:` (configurable with `--prefix`).  They are intercepted by the wrapper and never reach the emulator; every other line is forwarded to FS-UAE unchanged.
 
+The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.readthedocs.io/), so it supports cursor movement (Left/Right), Home/End, Backspace/Delete, and command history with the Up/Down arrows.  History is kept in memory for the current session.
+
 ### Options
 
 ```
@@ -120,13 +122,13 @@ Unit tests (no emulator required):
 uv run python -m unittest discover -s tests
 ```
 
-They cover parsing (including partial/multi-line output), command dispatch, watchpoint management, CSV creation/append/error handling, resume decisions, unrelated stops, and logging failures.  Parser tests use real captured output in `tests/fixtures/`.
+They cover parsing (including partial/multi-line output), command dispatch, watchpoint management, CSV creation/append/error handling, resume decisions, unrelated stops, logging failures, console input state, and child-output handling.  Parser tests use real captured output in `tests/fixtures/`.
 
-The automatic-resume pipeline (activate debugger → set watchpoint → `:logwatch` → repeated hits logged and resumed → CSV written → `:quit`) was also verified against a real FS-UAE 3.2.35 session with the game `--load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae` and watchpoint `$574`.  Integration requires a human to press F12+D once; there is no programmatic way to activate the debugger at startup.
+The full interactive flow was run end-to-end against a real FS-UAE 3.2.35 session (`--load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae`, watchpoint `$574`): a scripted PTY harness set the watchpoint, ran `:logwatch 0 score.csv`, resumed with `g`, observed consecutive watchpoint hits being logged and automatically resumed, and quit with `:quit`.  Every hit was logged exactly once and the emulator was left stopped on shutdown.  The only manual step was pressing F12+D to activate the debugger, which cannot be automated.
 
 ### Checks
 
-- `uv run python -m unittest discover -s tests` — 51 tests, all passing.
+- `uv run python -m unittest discover -s tests` — 63 tests, all passing.
 - `uvx ruff check .` — clean.
 - No type checker (mypy/pyright) is configured in this project.
 
@@ -134,4 +136,4 @@ The automatic-resume pipeline (activate debugger → set watchpoint → `:logwat
 
 - Only output formats confirmed against FS-UAE 3.2.35 are parsed.  Other versions or WinUAE may differ.
 - Watchpoints themselves are created with the native `w` command; the wrapper does not create them.
-- The debugger does not support readline-style line editing (the kernel echo is on in a normal session), so the wrapper's local line editing is limited to printable input and backspace.
+- Command history is kept in memory for the current session; it is not persisted across runs.

@@ -6,6 +6,15 @@ Add a short entry under `Unreleased` for every completed feature or behavioural 
 
 ## [Unreleased]
 
+### Added
+
+- `prompt_toolkit` as a runtime dependency.
+
+### Changed
+
+- Replaced the hand-written line editor with a `prompt_toolkit` `PromptSession`, so the input line now supports cursor movement (Left/Right), Home/End, Backspace/Delete, and command history with the Up/Down arrows.
+- The wrapper input loop now runs on `asyncio` and reads FS-UAE output with `loop.add_reader`; debugger output is rendered above the prompt via `patch_stdout()`, so asynchronous output no longer corrupts the line being typed.
+
 ## [0.1.0] - 2026-10-10
 
 ### Added
