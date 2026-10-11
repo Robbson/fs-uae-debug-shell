@@ -29,12 +29,13 @@ uv run main.py -- --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae
 FS-UAE starts the emulator normally. The debugger is **not** active at startup, so the wrapper cannot interact until you activate it:
 
 1. When the game is running, press **F12 + D** in the FS-UAE window.
-2. FS-UAE prints `WARNING: Activated debugger`, a register dump, and the interactive `>` prompt.
-From here the debugger behaves as usual.
+2. FS-UAE prints `WARNING: Activated debugger`, a register dump, and the interactive `>` prompt; the wrapper raises its own `> ` prompt at that point.
+
+From here the debugger behaves as usual. While the game is running FS-UAE's debugger accepts no console input, so the wrapper shows no prompt, and debugger output is written straight to the terminal rather than repainted above an active prompt.
 
 Shell-specific commands use the reserved prefix `:` (configurable with `--prefix`). They are intercepted by the wrapper and never reach the emulator; every other line is forwarded to FS-UAE unchanged.
 
-The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.readthedocs.io/), so it supports cursor movement (Left/Right), Home/End, Backspace/Delete, and command history with the Up/Down arrows. Press **Tab** for completion of shell command names and their parameters (`:output shell|log|both`, `:logfile` paths). History is kept in memory for the current session.
+The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.readthedocs.io/), so it supports cursor movement (Left/Right), Home/End, Backspace/Delete, and command history with the Up/Down arrows. Press **Tab** for completion of shell command names and their parameters (`:output shell|log|both`, `:logfile` paths). History is kept in memory for the current session. In `shell`/`both` mode the prompt is shown only while the debugger is at its `>` prompt; in `log` mode it stays up while the game runs so the status line keeps showing progress. Shell commands (including `:quit`) are available once the debugger is active.
 
 ### Options
 
@@ -64,7 +65,7 @@ The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.r
 | `log` | Hide watchpoint output on the terminal and write it to the CSV file. |
 | `both` | Show watchpoint hits and write them to the CSV file. |
 
-In `log` mode nothing from a watchpoint hit reaches the screen, so the shell keeps a fixed status line at the bottom with the running total of logged events and a counter per watchpoint.
+In `log` mode nothing from a watchpoint hit reaches the screen, so the shell keeps a fixed status line at the bottom with the running total of logged events and a counter per watchpoint. Because the hit block is hidden there, the prompt and that status line stay up while the game runs, so the counter is continuously visible and updates on every hit; a hit that is only logged still stops the emulator, exactly as the native debugger does.
 
 `:logfile <file>` sets the CSV file name; the default is `output_<timestamp>.csv` (with milliseconds, so two sessions never collide). The file is created **lazily**, on the first hit that is actually logged: until then the chosen name only exists in memory. If a user-supplied name already exists, an increasing numeric suffix is appended (for example `report_1.csv`, `report_2.csv`) so earlier logs are never overwritten. Changing `:logfile` starts a new file on the next logged hit.
 
@@ -138,7 +139,7 @@ They cover parsing (including partial/multi-line output), command dispatch and c
 
 ### Checks
 
-- `uv run python -m unittest discover -s tests` — 91 tests, all passing.
+- `uv run python -m unittest discover -s tests` — 101 tests, all passing.
 - `uvx ruff check .` — clean.
 - No type checker (mypy/pyright) is configured in this project.
 
@@ -146,5 +147,5 @@ They cover parsing (including partial/multi-line output), command dispatch and c
 
 - Only output formats confirmed against FS-UAE 3.3.0 or higher are parsed. Other versions or WinUAE differ.
 - Watchpoints are created with the native `w` command; the wrapper does not create them for you.
-- In `log` mode watchpoint output is intentionally hidden from the terminal; use `:output both` to see it as well.
+- In `log` mode watchpoint output is intentionally hidden from the terminal; use `:output both` to see it as well. The prompt stays up while the game runs there so the status line is always visible; FS-UAE does not read console input while running, so typing while it is not halted has no effect.
 - Command history is kept in memory for the current session; it is not persisted across runs.

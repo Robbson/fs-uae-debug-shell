@@ -32,7 +32,7 @@ Why the _Debug Shell_ is built the way it is.  Each record captures the context,
 
 **Decision.** Spawn FS-UAE with `echo=False` and provide the input line with `prompt_toolkit`'s `PromptSession`, driven by an `asyncio` loop.  The child PTY is read with `loop.add_reader` and its output is rendered above the prompt with `patch_stdout(raw=True)`; `Console` in `terminal.py` wraps this.  `pexpect` keeps ownership of the child PTY; only `prompt_toolkit` reads stdin.
 
-**Consequences.** Input is shown exactly once and `:` commands never reach the emulator.  Cursor movement, Home/End, Backspace/Delete, and Up/Down history come from `prompt_toolkit`'s default key bindings; history is in-memory for the session only.  The wrapper depends on `prompt_toolkit` and uses `asyncio` for its input loop.  Only `prompt_toolkit` reads stdin, so there is no competing read of the terminal.
+**Consequences.** Input is shown exactly once and `:` commands never reach the emulator.  Cursor movement, Home/End, Backspace/Delete, and Up/Down history come from `prompt_toolkit`'s default key bindings; history is in-memory for the session only.  The wrapper depends on `prompt_toolkit` and uses `asyncio` for its input loop.  Only `prompt_toolkit` reads stdin, so there is no competing read of the terminal.  The prompt is not kept active for the whole session; it follows the debugger's own prompt (see ADR-0010).
 
 ## ADR-0005: Append-only CSV with a fixed schema and per-record flush
 
@@ -70,6 +70,22 @@ Why the _Debug Shell_ is built the way it is.  Each record captures the context,
 
 **Context.** Shell commands have fixed choices and file arguments that are easy to mistype, and `log` mode hides all watchpoint output, leaving no feedback that logging works.
 
-**Decision.** Add a `prompt_toolkit` `Completer` (`WrapperCompleter`) that completes command names and their arguments on lines that start with the shell prefix: fixed choices for `:output`, filesystem paths for `:logfile`.  In `log` mode, render a `bottom_toolbar` status line with the running total and a counter per watchpoint, refreshed by invalidating the prompt when a hit is logged.
+**Decision.** Add a `prompt_toolkit` `Completer` (`WrapperCompleter`) that completes command names and their arguments on lines that start with the shell prefix: fixed choices for `:output`, filesystem paths for `:logfile`.  In `log` mode, render a `bottom_toolbar` status line with the running total and a counter per watchpoint.
 
 **Consequences.** Commands are discoverable and less error-prone, and `log` mode still gives visible per-watchpoint feedback.  Completion only engages after the shell prefix, so native debugger input is untouched.  The counter lives at a fixed screen position rather than scrolling with output.
+
+## ADR-0010: The interactive prompt is raised only at the debugger's prompt
+
+**Context.** The wrapper originally kept a `prompt_toolkit` prompt active for the whole session.  `patch_stdout` only writes straight to the terminal when no application is running; while a prompt is up it routes every write through `run_in_terminal`, which erases the prompt, switches the terminal to cooked mode, writes, and repaints, and its flush thread sleeps a fixed debounce between batches.  FS-UAE accepts no console input while emulation runs, so a continuously active prompt repaints register and memory dumps the user cannot interact with, and watchpoint-hit streams arrive in slow, debounced pulses.
+
+**Decision.** In `shell` and `both` mode, raise the interactive prompt only while the debugger is idle at its `>` prompt.  A `PROMPT` event sets an `asyncio.Event` (`_prompt_ready`); forwarding a command clears it until the debugger prints `>` again.  While emulation runs, and while a forwarded command's output is still arriving, no `prompt_toolkit` application is running, so `patch_stdout` writes child output straight to the terminal.  Each PTY read is written to the terminal in one `Console.write` call.  In `log` mode the prompt is instead kept raised while emulation runs, so the status line stays visible: the hit block is hidden there, so there is nothing to repaint, and the counter updates through `Console.refresh()`.
+
+**Consequences.** In `shell`/`both` mode dumps and watchpoint-hit streams are written directly and appear at terminal speed instead of being repainted per batch, and no shell prompt is shown when FS-UAE cannot accept input.  In `log` mode the prompt (with its status line) persists across resumes, so the logged-event counter never disappears; the cost is that the prompt is up while emulation runs in that mode, and any non-hidden output printed then is rendered through the prompt.  `:help`, `:status`, `:output`, `:logfile`, and `:quit` are reachable once the debugger is active, and the wrapper depends on the debugger printing `>` to restore the prompt in `shell`/`both` mode.
+
+## ADR-0011: Single-pass incremental parsing
+
+**Context.** `DebuggerOutputParser.feed_pieces` re-sliced its buffer after every line, copying the remaining buffer each time — O(n²) in the chunk, and measurable on large dumps.
+
+**Decision.** Walk the chunk with a cursor and copy only the unfinished tail once at the end, leaving the recognised formats and byte-for-byte output unchanged.
+
+**Consequences.** Parsing a large chunk is a single pass.  Partial lines are still buffered across calls, and the prompt is still recognised without a trailing newline.

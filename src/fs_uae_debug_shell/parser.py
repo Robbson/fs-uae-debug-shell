@@ -171,21 +171,28 @@ class DebuggerOutputParser:
         ending, where present) together with any structured event the line
         produced.  The same parse therefore drives both automation and what is
         shown to the user.
+
+        The stream is walked with a cursor into a single buffer and only the
+        unfinished tail is copied, so a large chunk costs one pass rather than
+        a fresh slice per line.
         """
 
         self._buffer += text
+        buffer = self._buffer
         pieces: list[Piece] = []
-        while self._buffer:
-            newline = self._buffer.find("\n")
+        start = 0
+        end = len(buffer)
+        while start < end:
+            newline = buffer.find("\n", start)
             if newline == -1:
-                if self._buffer.startswith(">"):
+                if buffer[start] == ">":
                     pieces.append(Piece(">", Event(EventType.PROMPT, line=">")))
-                    self._buffer = self._buffer[1:]
+                    start += 1
                     continue
                 break
-            raw = self._buffer[: newline + 1]
-            line = self._buffer[:newline].rstrip("\r")
-            self._buffer = self._buffer[newline + 1 :]
+            raw = buffer[start : newline + 1]
+            line = buffer[start:newline].rstrip("\r")
+            start = newline + 1
             if line.startswith(">"):
                 pieces.append(Piece(">", Event(EventType.PROMPT, line=">")))
                 remainder = line[1:]
@@ -195,6 +202,7 @@ class DebuggerOutputParser:
                     pieces.append(Piece(raw[1:]))
                 continue
             pieces.append(Piece(raw, parse_line(line)))
+        self._buffer = buffer[start:]
         return pieces
 
     @property

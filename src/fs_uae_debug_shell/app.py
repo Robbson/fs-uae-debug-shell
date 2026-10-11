@@ -40,6 +40,7 @@ class Application:
         self.state = SessionState.RUNNING
         self._stopping = False
         self._suppress_block = False
+        self._prompt_ready = asyncio.Event()
         self._definitions: dict[int, str] = {}
         self.dispatcher = CommandDispatcher(
             prefix=config.prefix,
@@ -77,7 +78,18 @@ class Application:
         return 0
 
     async def _input_loop(self) -> None:
+        # The interactive prompt is raised only while the debugger is idle at
+        # its ``>`` prompt, so that while emulation runs or a command's output is
+        # still arriving no ``prompt_toolkit`` application is running and child
+        # output is written straight to the terminal.  ``log`` mode is the
+        # exception: its hit block is hidden, so there is nothing to repaint and
+        # the prompt (with its status line) is kept up while emulation runs for
+        # continuous counter feedback.
         while not self._stopping and self.session.alive():
+            if not self._prompt_is_persistent():
+                await self._prompt_ready.wait()
+            if self._stopping or not self.session.alive():
+                break
             self.session.set_dimensions(*Console.size())
             toolbar = self._toolbar_text if self.output.show_counters else None
             try:
@@ -92,6 +104,16 @@ class Application:
             if self._stopping:
                 break
             self._handle_line(line)
+
+    def _prompt_is_persistent(self) -> bool:
+        """Whether the prompt stays raised while the debugger is not at ``>``.
+
+        True only in ``log`` mode, where the watchpoint hit block is hidden and
+        the status line is the sole feedback; the prompt is then kept up across
+        resumes so the counter never disappears.
+        """
+
+        return self.output.show_counters
 
     def _shutdown(self) -> None:
         self.output.close()
@@ -120,40 +142,49 @@ class Application:
         self._consume_output(text)
 
     def _consume_output(self, text: str) -> None:
+        out: list[str] = []
         for piece in self.parser.feed_pieces(text):
-            self._handle_piece(piece)
+            self._handle_piece(piece, out)
+        if out:
+            self.console.write("".join(out))
 
-    def _handle_piece(self, piece: Piece) -> None:
+    def _handle_piece(self, piece: Piece, out: list[str]) -> None:
         event = piece.event
         if event is not None and event.type is EventType.WATCHPOINT_HIT:
             display = self.output.display_enabled
             if display:
-                self._write(piece.text)
-            self._process_events([event])
+                out.append(piece.text)
+            self._process_events([event], out)
             self._suppress_block = self.output.log_enabled and not display
             return
         if event is not None and event.type is EventType.PROMPT:
             if not self._suppress_block and piece.text != ">":
-                self._write(piece.text)
+                out.append(piece.text)
             self._suppress_block = False
-            self._process_events([event])
+            self._process_events([event], out)
             return
         if self._suppress_block:
             return
-        self._write(piece.text)
+        out.append(piece.text)
         if event is not None:
-            self._process_events([event])
+            self._process_events([event], out)
 
     def _stop_from_child(self) -> None:
         self._stopping = True
+        self._prompt_ready.set()
         self.console.cancel()
 
-    def _process_events(self, events: list[Event]) -> None:
+    def _process_events(
+        self, events: list[Event], out: list[str] | None = None
+    ) -> None:
         for event in events:
             if event.type is EventType.WATCHPOINT_HIT and event.hit is not None:
-                self._on_hit(event.hit)
+                self._on_hit(event.hit, out)
             elif event.type is EventType.DEBUGGER_ACTIVATED:
                 self.state = SessionState.STOPPED
+            elif event.type is EventType.PROMPT:
+                self.state = SessionState.STOPPED
+                self._prompt_ready.set()
             elif event.type is EventType.WATCHPOINT_DEFINED and event.definition is not None:
                 definition = event.definition
                 self._definitions[definition.watchpoint] = (
@@ -161,15 +192,19 @@ class Application:
                     f"({definition.length}) {definition.access} {definition.scope}"
                 )
 
-    def _on_hit(self, hit: WatchpointHit) -> None:
+    def _on_hit(self, hit: WatchpointHit, out: list[str] | None = None) -> None:
         self.state = SessionState.STOPPED
         try:
             self.output.record(hit)
         except EventLogError as exc:
             log.error("%s", exc)
-            self._write(
+            message = (
                 f"\n[wrapper] error: failed to log watchpoint {hit.watchpoint}: {exc}\n"
             )
+            if out is None:
+                self._write(message)
+            else:
+                out.append(message)
             return
         if self.output.log_enabled:
             self.console.refresh()
@@ -183,6 +218,9 @@ class Application:
             if result.quit:
                 self._stopping = True
             return
+        # Forwarding a command takes the debugger off its prompt: drop the
+        # interactive prompt and re-raise it only at the next ``>``.
+        self._prompt_ready.clear()
         self._send_commands((text,))
 
     def _send_commands(self, commands: tuple[str, ...]) -> None:

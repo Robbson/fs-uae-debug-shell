@@ -39,9 +39,11 @@ The shell launches FS-UAE as a child process on a pseudo-terminal (PTY) and owns
 
 1. `Session.start` spawns FS-UAE on a PTY with child echo disabled.
 2. `Application._run_async` registers the child PTY fd with `loop.add_reader` and enters `Console.patched_stdout()`.
-3. Child output: the reader callback decodes the text and passes it to `DebuggerOutputParser.feed_pieces`, which returns `Piece`s in order (the exact text plus any structured `Event`).
+3. Child output: the reader callback decodes the text and passes it to `DebuggerOutputParser.feed_pieces`, which returns `Piece`s in order (the exact text plus any structured `Event`). Everything produced by one read is written to the terminal in a single `Console.write` call.
 4. `Application._handle_piece` routes each piece. Watchpoint hit output is shown and/or hidden according to `OutputRouter.display_enabled`; every hit is passed to `_process_events`, which updates debugger definitions, tracks the prompt, and records the hit.
 5. Input: `Console.prompt_async` returns one edited line. `Application` dispatches lines starting with the shell prefix to `CommandDispatcher`; everything else is written to the child PTY unchanged.
+
+The interactive prompt is only raised while the debugger is idle at its own `>` prompt (see below) — except in `log` mode, where it stays up for the status line — so the bulk of debugger output is written directly rather than repainted above a prompt.
 
 ## State model
 
@@ -53,9 +55,10 @@ The shell launches FS-UAE as a child process on a pseudo-terminal (PTY) and owns
 | `STOPPED` | The debugger console is at its `>` prompt. |
 | `CLOSED` | The child process is gone. |
 
-The application additionally tracks one internal flag:
+The application additionally tracks one internal flag and one internal event:
 
 - `_suppress_block` — a watchpoint hit is being hidden (set in `log` mode until the next prompt).
+- `_prompt_ready` — an `asyncio.Event` set when the debugger prints its `>` prompt and cleared when the wrapper forwards a command; it gates when the interactive prompt is shown.
 
 ## Debugger output parser
 
@@ -67,7 +70,7 @@ The application additionally tracks one internal flag:
 - watchpoint hit: `Memwatch <id>: break at <addr>.<size>  <access>  <value> PC=<pc> <trailer>`;
 - the prompt: a bare `>` at the start of a line.
 
-The parser is incremental: it buffers partial lines across `feed_pieces()` calls and recognises the prompt without a trailing newline. `feed()` remains as a convenience that returns only the structured events.
+The parser is incremental: it buffers partial lines across `feed_pieces()` calls and recognises the prompt without a trailing newline. `feed()` remains as a convenience that returns only the structured events. A chunk is walked with a cursor into a single buffer and only the unfinished tail is copied at the end, so parsing a large chunk is one pass rather than a fresh slice per line.
 
 ## Output routing and logging
 
@@ -87,11 +90,16 @@ The parser is incremental: it buffers partial lines across `feed_pieces()` calls
 
 `Console` wraps a `prompt_toolkit` `PromptSession`. `WrapperCompleter` completes shell command names and their arguments (fixed choices for `:output`, filesystem paths for `:logfile`). The shell renders its own `> ` prompt through `prompt_toolkit` and hides the debugger's bare `>` so the cursor sits after the prompt rather than on top of it. In `log` mode, `Application._input_loop` passes a `bottom_toolbar` callback that renders the per-watchpoint counters as a fixed status line; `Console.refresh()` invalidates the prompt so the counters update as hits arrive.
 
+The prompt follows the debugger's own input semantics in `shell` and `both` mode: it is raised only while the debugger is idle at its `>` prompt. `_input_loop` waits on `_prompt_ready`; a `PROMPT` event sets it, and forwarding a command clears it until the debugger prints `>` again. While emulation runs, and while a command's output is still arriving, no `prompt_toolkit` application is running, so `patch_stdout` writes child output straight to the terminal instead of erasing and repainting a prompt for every output batch.
+
+`log` mode is the exception. Its hit block is hidden, so the status line is the only feedback and the prompt (with its toolbar) stays raised while emulation runs, so the per-watchpoint counter never disappears on resume; `_prompt_is_persistent` expresses this. Nothing is repainted in that mode because the hit block is not written, and the counter is updated through `Console.refresh()` when a hit is logged.
+
 ## Concurrency
 
 The design uses one `asyncio` event loop:
 
 - `loop.add_reader` reads the child PTY as output arrives; `Console.prompt_async()` reads the input line. Both run on the same loop, so no threads are needed.
-- `patch_stdout(raw=True)` renders child output above the active prompt, so asynchronous debugger output cannot corrupt the line being typed.
+- `patch_stdout(raw=True)` renders child output above the active prompt, so asynchronous debugger output cannot corrupt the line being typed. Because the prompt is only active at the debugger's `>` prompt (except in `log` mode, where the hidden hit blocks leave nothing to repaint), most output bypasses this path and is written directly.
+- Each PTY read is parsed into pieces and written in a single `Console.write` call, so a multi-line dump is one write rather than one per line.
 - The child PTY is resized to the current terminal size before each prompt (`prompt_toolkit` owns the `SIGWINCH` handler while the prompt is active and repaints its own line).
 - `pexpect` keeps ownership of the child PTY (echo disabled); only `prompt_toolkit` reads stdin, so there is no competing read of the terminal.

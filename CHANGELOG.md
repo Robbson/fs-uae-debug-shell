@@ -19,7 +19,14 @@ Add a short entry under `Unreleased` for every completed feature or behavioural 
 
 - Watchpoint logging is now global rather than per watchpoint; hits go to the screen, the CSV log, or both according to the current `:output` mode.
 - The interactive prompt is rendered by `prompt_toolkit` as `> `, so the cursor sits after the prompt instead of on top of the debugger's `>` character.
+- In `shell`/`both` mode the interactive prompt is raised only while the debugger is idle at its `>` prompt. Output produced while emulation runs or while a forwarded command is executing is written directly to the terminal instead of being erased and repainted above a prompt, so dumps and watchpoint-hit streams no longer arrive in slow, debounced pulses.
+- In `log` mode the prompt and its status line stay up while the game runs, so the per-watchpoint counter remains visible and updates on every logged hit; the hit block is hidden there, so nothing needs repainting.
+- Output from a single PTY read is written to the terminal in one batch rather than one write per parsed line.
 - CSV timestamps no longer carry a timezone offset, and the `watchpoint` column is now headed `wp`.
+
+### Fixed
+
+- The incremental parser no longer re-copies its buffer for every line, so a large output chunk is parsed in a single pass instead of quadratic time.
 
 ## [0.1.0] - 2026-10-10
 

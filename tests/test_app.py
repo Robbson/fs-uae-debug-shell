@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
 import tempfile
 import unittest
@@ -44,10 +46,12 @@ class FakeSession:
 class FakeConsole:
     def __init__(self) -> None:
         self.data = ""
+        self.writes = 0
         self.cancelled = False
         self.refreshed = False
 
     def write(self, text: str) -> None:
+        self.writes += 1
         self.data += text
 
     def cancel(self) -> None:
@@ -57,8 +61,14 @@ class FakeConsole:
         self.refreshed = True
 
 
-def make_app(case: unittest.TestCase, tmp: str, **overrides: object) -> Application:
-    console = FakeConsole()
+def make_app(
+    case: unittest.TestCase,
+    tmp: str,
+    console: FakeConsole | None = None,
+    **overrides: object,
+) -> Application:
+    if console is None:
+        console = FakeConsole()
     config = AppConfig(fsuae_args=["--load_state=2", "cfg.fs-uae"], **overrides)
     app = Application(config, console=console)  # type: ignore[arg-type]
     app.session = FakeSession()  # type: ignore[assignment]
@@ -140,6 +150,22 @@ class OutputRoutingTests(unittest.TestCase):
             app._process_events([hit_event()])
             assert isinstance(app.console, FakeConsole)
             self.assertTrue(app.console.refreshed)
+
+    def test_log_mode_status_line_visible_after_hidden_hit(self) -> None:
+        # In log mode the hit block is hidden, so the status line is the only
+        # feedback; it must be available again at the debugger prompt that
+        # follows every hit.
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app.output.set_mode(OutputMode.LOG)
+            app._consume_output(HIT_LINE + "\n" + DUMP + ">")
+            assert isinstance(app.console, FakeConsole)
+            self.assertEqual(app.console.data, "")
+            self.assertTrue(app._prompt_ready.is_set())
+            self.assertTrue(app.output.show_counters)
+            text = app._toolbar_text()
+            self.assertIn("logged: 1", text)
+            self.assertIn("wp0: 1", text)
 
     def test_logging_failure_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -270,6 +296,99 @@ class ChildReaderTests(unittest.TestCase):
             app._on_child_readable()
             assert isinstance(app.console, FakeConsole)
             self.assertEqual(app.console.data, "")
+
+
+class PromptLifecycleTests(unittest.TestCase):
+    """The interactive prompt is only raised at the debugger's own prompt."""
+
+    def test_prompt_not_ready_before_debugger_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            self.assertFalse(app._prompt_ready.is_set())
+
+    def test_prompt_ready_after_prompt_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._process_events([prompt_event()])
+            self.assertTrue(app._prompt_ready.is_set())
+
+    def test_prompt_ready_via_child_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._consume_output("Next PC: 00008a6e\n>")
+            self.assertTrue(app._prompt_ready.is_set())
+
+    def test_forwarded_command_drops_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._process_events([prompt_event()])
+            app._handle_line("r")
+            self.assertFalse(app._prompt_ready.is_set())
+
+    def test_wrapper_command_keeps_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._process_events([prompt_event()])
+            app._handle_line(":status")
+            self.assertTrue(app._prompt_ready.is_set())
+
+    def test_child_close_wakes_prompt_wait(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._stop_from_child()
+            self.assertTrue(app._prompt_ready.is_set())
+
+    def test_output_is_written_once_per_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._consume_output(HIT_LINE + "\n" + DUMP + ">")
+            assert isinstance(app.console, FakeConsole)
+            self.assertEqual(app.console.writes, 1)
+
+
+class BlockingConsole(FakeConsole):
+    """Console whose prompt blocks forever, counting how often it is raised."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.prompt_calls = 0
+
+    async def prompt_async(self, message: str = "", bottom_toolbar=None) -> str:
+        self.prompt_calls += 1
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+class PromptPersistenceTests(unittest.TestCase):
+    """The prompt stays up while emulation runs only in log mode."""
+
+    def _drive_briefly(self, app: Application) -> None:
+        async def scenario() -> None:
+            task = asyncio.ensure_future(app._input_loop())
+            for _ in range(10):
+                await asyncio.sleep(0)
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        asyncio.run(scenario())
+
+    def test_shell_mode_prompt_waits_for_debugger_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            console = BlockingConsole()
+            app = make_app(self, tmp, console=console)
+            self.assertFalse(app._prompt_is_persistent())
+            self._drive_briefly(app)
+            self.assertEqual(console.prompt_calls, 0)
+
+    def test_log_mode_prompt_stays_up_while_running(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            console = BlockingConsole()
+            app = make_app(self, tmp, console=console)
+            app.output.set_mode(OutputMode.LOG)
+            self.assertTrue(app._prompt_is_persistent())
+            self._drive_briefly(app)
+            self.assertEqual(console.prompt_calls, 1)
 
 
 if __name__ == "__main__":
