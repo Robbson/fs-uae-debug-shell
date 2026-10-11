@@ -1,4 +1,4 @@
-"""Command-line entry point for the FS-UAE debug wrapper."""
+"""Command-line entry point for the Debug Shell."""
 
 from __future__ import annotations
 
