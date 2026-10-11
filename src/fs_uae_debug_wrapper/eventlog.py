@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .parser import WatchpointHit
 
-HEADER = ["timestamp", "wp", "name", "address", "size", "access", "value", "pc"]
+HEADER = ["timestamp", "wp", "address", "size", "access", "value", "pc"]
 
 
 class EventLogError(RuntimeError):
@@ -45,16 +45,14 @@ class CsvEventWriter:
     def append(
         self,
         hit: WatchpointHit,
-        name: str = "",
         timestamp: datetime | None = None,
     ) -> None:
-        """Append one record for *hit*, tagged with the watch *name*."""
+        """Append one record for *hit*."""
 
         moment = timestamp if timestamp is not None else datetime.now()
         row = [
             moment.isoformat(timespec="milliseconds"),
             hit.watchpoint,
-            name,
             _hex(hit.address),
             hit.size,
             hit.access,

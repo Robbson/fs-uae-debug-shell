@@ -64,7 +64,7 @@ Memwatch <id>: break at <addr>.<size>  <access>  <value> PC=<pc> <trailer>
 - `<pc>`: 8 hex digits.
 - `<trailer>`: informational only (observed `CPUDW (000)`).
 
-A hit is followed by the same register dump / disassembly / `Next PC` block as a manual activation, ending in the `>` prompt.  Automatic resume must wait for that prompt before sending `g`.
+A hit is followed by the same register dump / disassembly / `Next PC` block as a manual activation, ending in the `>` prompt.  The wrapper logs the hit and displays this block unchanged; the user decides whether and when to resume with `g`.
 
 ## Terminal echo
 

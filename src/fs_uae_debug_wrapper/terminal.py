@@ -57,14 +57,6 @@ class Console:
         except (BrokenPipeError, ValueError):
             pass
 
-    def input_pending(self) -> bool:
-        """Return whether the user has typed an unsubmitted line."""
-
-        session = self._session
-        if session is None:
-            return False
-        return bool(session.default_buffer.text)
-
     def cancel(self) -> None:
         """Dismiss an active prompt (used when the child process exits)."""
 

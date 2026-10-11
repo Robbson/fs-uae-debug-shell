@@ -2,9 +2,7 @@
 
 ## 1. Overview
 
-_FS-UAE Debug Wrapper_ is a Python-based interactive wrapper around the FS-UAE console debugger on Linux. It keeps the native debugger fully usable while adding automation: monitoring memory watchpoints, parsing debugger output, logging values to files, and automatically resuming emulation after selected debugger breaks.
-
-The motivation is that the FS-UAE debugger lacks some of the logging-only functionality available in WinUAE: memory watchpoints that stop emulation should support continuous logging without manual intervention on every hit.
+_FS-UAE Debug Wrapper_ is a Python-based interactive wrapper around the FS-UAE console debugger on Linux. It keeps the native debugger fully usable while adding automation: monitoring memory watchpoints, parsing debugger output, and logging watchpoint hits to CSV files.
 
 The wrapper is an automation layer on top of the existing debugger, not a replacement for it.  With all automation disabled it must still behave like an ordinary interactive debugger.
 
@@ -19,7 +17,7 @@ These hold for the whole life of the project and must not be tied to a particula
 - **Fail visible and safe.** Report errors so they are visible and actionable. When the state is uncertain or a step fails, stop automation and return control to the user instead of guessing. Never silently discard debugger output.
 
 - **Observability over cleverness.** Prefer simple, understandable behaviour. Keep wrapper messages clearly distinguishable from FS-UAE console output.
-- **Do not alter emulated state.** Never change emulated memory or execution state beyond the explicitly configured resume behaviour (`g`).  Do not modify FS-UAE itself.
+- **Do not alter emulated state.** Never change emulated memory or execution state.  Do not modify FS-UAE itself.
 
 ## 3. Behaviour
 
@@ -40,22 +38,13 @@ These hold for the whole life of the project and must not be tied to a particula
 
 ### 3.3 Watchpoint logging
 
-The user creates watchpoints with the native debugger (`w`), or with the wrapper's `:wwcl` shortcut, which also enables logging and names the watches; the wrapper observes hits either way.
+The user creates watchpoints with the native debugger (`w`); the wrapper observes hits.
 
-When a configured watchpoint causes a break, the wrapper recognizes the event, parses the hit, appends a record to the configured log file, and — if enabled — resumes emulation.  Parsing and logging must be based on output confirmed for the target FS-UAE version; unparsed fields are reported, never fabricated.  Watches created with `:wwcl` additionally drop hits whose value is unchanged, comparing against the last value kept in memory (FS-UAE's own must-change flag is unreliable), and log to a CSV named after the watches.
+When a configured watchpoint causes a break, the wrapper recognizes the event, parses the hit, and appends a record to the configured log file.  Parsing and logging must be based on output confirmed for the target FS-UAE version; unparsed fields are reported, never fabricated.
 
-By default the wrapper shows only the `Memwatch ...` line for hits it logs and automatically resumes, so continuous logging does not flood the terminal; `--show-watchpoint-dump` restores the debugger's register dump and the per-hit summary.  This reduction is documented and configurable, never silent, and the raw hit line is always shown.
+The wrapper never resumes emulation automatically: a hit leaves the emulator stopped at the debugger prompt, and the user continues with `g`.  Debugger output is shown unchanged.
 
-### 3.4 Safe automatic resume
-
-- Resume automatically only after a recognized, explicitly configured logging event has been parsed *and* logged successfully.
-- Never resume after an unrelated breakpoint, exception, debugger activation, or when the debugger state is uncertain.
-- Wait for the debugger prompt before sending `g`, and do not race with user input: if the user is typing, skip automatic resume and leave control with the user.
-- Provide a way to disable automatic resume (`:auto off`, `--no-auto-resume`).
-- If logging fails, leave the emulator stopped and report the error rather than continuing silently.
-- Guard against duplicate resumes caused by duplicated or delayed output.
-
-### 3.5 Log file format
+### 3.4 Log file format
 
 - CSV, UTF-8, append-only.  Write a header only when the file is newly created or empty, and flush so recent records survive an interruption.
 - Include a timestamp when one can be obtained reliably, plus the watchpoint id.
@@ -94,12 +83,12 @@ Keep the implementation modular with clear boundaries between terminal handling,
 
 - Handle user input and debugger output concurrently with a straightforward design that works reliably with `pexpect` and POSIX terminals.  Interactive input is provided by `prompt_toolkit` (which runs on `asyncio`); do not add further asynchronous frameworks or concurrency libraries without a demonstrated need.
 - Debugger output can arrive in partial chunks, and one logical event may span several lines; parse incrementally.
-- A debugger prompt may appear before or after relevant output; automatic resume must not race with user input.
+- A debugger prompt may appear before or after relevant output; the wrapper never sends commands on its own, so there is no race with user input.
 - Use explicit, named states and transitions rather than implicit behaviour.
 
 ## 8. Error handling and diagnostics
 
-Errors must be visible and actionable.  Examples: FS-UAE executable not found; the child process exits unexpectedly; debugger output cannot be parsed; a watchpoint id is unknown; a log file cannot be opened or written; automatic resume would be unsafe because the debugger state is uncertain.
+Errors must be visible and actionable.  Examples: FS-UAE executable not found; the child process exits unexpectedly; debugger output cannot be parsed; a watchpoint id is unknown; a log file cannot be opened or written.
 
 - Do not swallow exceptions or suppress important debugger output.
 - Use standard `logging` for wrapper diagnostics, keeping wrapper messages distinguishable from FS-UAE console output.
@@ -115,7 +104,7 @@ Errors must be visible and actionable.  Examples: FS-UAE executable not found; t
 
 ## 10. Testing
 
-- Unit-test logic that does not require a running emulator, in particular: debugger output parsing (including partial and multi-line output), wrapper command parsing and dispatch, watchpoint configuration management, change filtering, generated log paths, CSV creation/appending and errors, automatic-resume decisions, unrelated debugger stops, logging failures, and process termination/cleanup.
+- Unit-test logic that does not require a running emulator, in particular: debugger output parsing (including partial and multi-line output), wrapper command parsing and dispatch, watchpoint logging configuration management, CSV creation/appending and errors, hit handling, unrelated debugger stops, logging failures, and process termination/cleanup.
 - Use captured FS-UAE output in `tests/fixtures/` as fixtures wherever possible.
 - Prefer deterministic synchronization over arbitrary timing delays.
 - Do not claim that integration tests pass unless they have actually been run.

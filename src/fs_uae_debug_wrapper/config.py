@@ -12,6 +12,4 @@ class AppConfig:
     executable: str = "fs-uae"
     fsuae_args: list[str] = field(default_factory=list)
     prefix: str = ":"
-    auto_resume: bool = True
-    show_watchpoint_dump: bool = False
     verbose: bool = False

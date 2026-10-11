@@ -36,8 +36,8 @@ class CsvEventWriterTests(unittest.TestCase):
             path = Path(tmp) / "score.csv"
             writer = CsvEventWriter(path)
             ts = datetime(2026, 10, 10, 12, 0, 0)
-            writer.append(make_hit(0x5B), name="ball.x", timestamp=ts)
-            writer.append(make_hit(0x5C), name="ball.x", timestamp=ts)
+            writer.append(make_hit(0x5B), timestamp=ts)
+            writer.append(make_hit(0x5C), timestamp=ts)
             writer.close()
             lines = path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 3)
@@ -47,7 +47,6 @@ class CsvEventWriterTests(unittest.TestCase):
                 [
                     "2026-10-10T12:00:00.000",
                     "0",
-                    "ball.x",
                     "0x00000574",
                     "W",
                     "W",
@@ -55,16 +54,7 @@ class CsvEventWriterTests(unittest.TestCase):
                     "0x0000C28C",
                 ],
             )
-            self.assertEqual(lines[2].split(",")[6], "0x0000005C")
-
-    def test_name_defaults_to_empty(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "score.csv"
-            writer = CsvEventWriter(path)
-            writer.append(make_hit())
-            writer.close()
-            row = path.read_text(encoding="utf-8").splitlines()[1].split(",")
-            self.assertEqual(row[2], "")
+            self.assertEqual(lines[2].split(",")[5], "0x0000005C")
 
     def test_reopen_does_not_duplicate_header(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

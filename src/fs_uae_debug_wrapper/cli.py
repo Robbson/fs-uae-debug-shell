@@ -38,17 +38,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="wrapper command prefix (default: %(default)s)",
     )
     parser.add_argument(
-        "--no-auto-resume",
-        action="store_true",
-        help="start with automatic resume disabled",
-    )
-    parser.add_argument(
-        "--show-watchpoint-dump",
-        action="store_true",
-        help="also print the debugger register dump on watchpoint hits "
-        "(hidden by default)",
-    )
-    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -81,8 +70,6 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         executable=namespace.fsuae,
         fsuae_args=fsuae_args,
         prefix=namespace.prefix,
-        auto_resume=not namespace.no_auto_resume,
-        show_watchpoint_dump=namespace.show_watchpoint_dump,
         verbose=namespace.verbose,
     )
 
