@@ -23,15 +23,15 @@ The wrapper launches FS-UAE as a child process on a pseudo-terminal (PTY) and ow
 | Module | Responsibility |
 | --- | --- |
 | `main.py` | Entry point; calls `cli.main`. |
-| `src/fs_uae_debug_wrapper/cli.py` | Argument parsing and wrapper logging setup. |
-| `src/fs_uae_debug_wrapper/config.py` | `AppConfig` runtime configuration dataclass. |
-| `src/fs_uae_debug_wrapper/app.py` | Orchestration: event loop, state, wiring. |
-| `src/fs_uae_debug_wrapper/session.py` | FS-UAE process ownership over a `pexpect` PTY; `SessionState`. |
-| `src/fs_uae_debug_wrapper/terminal.py` | Interactive prompt via `prompt_toolkit`: line editing/history, `patch_stdout` output (`Console`). |
-| `src/fs_uae_debug_wrapper/parser.py` | Incremental debugger output parser and event types. |
-| `src/fs_uae_debug_wrapper/commands.py` | Wrapper command parsing and dispatch. |
-| `src/fs_uae_debug_wrapper/watchpoints.py` | Watchpoint ↔ log file management. |
-| `src/fs_uae_debug_wrapper/eventlog.py` | Append-only CSV event writer. |
+| `src/fs_uae_debug_shell/cli.py` | Argument parsing and wrapper logging setup. |
+| `src/fs_uae_debug_shell/config.py` | `AppConfig` runtime configuration dataclass. |
+| `src/fs_uae_debug_shell/app.py` | Orchestration: event loop, state, wiring. |
+| `src/fs_uae_debug_shell/session.py` | FS-UAE process ownership over a `pexpect` PTY; `SessionState`. |
+| `src/fs_uae_debug_shell/terminal.py` | Interactive prompt via `prompt_toolkit`: line editing/history, `patch_stdout` output (`Console`). |
+| `src/fs_uae_debug_shell/parser.py` | Incremental debugger output parser and event types. |
+| `src/fs_uae_debug_shell/commands.py` | Wrapper command parsing and dispatch. |
+| `src/fs_uae_debug_shell/watchpoints.py` | Watchpoint ↔ log file management. |
+| `src/fs_uae_debug_shell/eventlog.py` | Append-only CSV event writer. |
 
 `eventlog.py` is named to avoid shadowing the Python standard-library `logging` module (see [`decisions.md`](decisions.md)).
 

@@ -1,6 +1,6 @@
 # Decisions
 
-Why the FS-UAE Debug Wrapper is built the way it is.  Each record captures the context, the decision, and its consequences.  Keep the log describing the decisions that apply to the current code, free of superseded or abandoned experiments.  For the resulting structure see [`architecture.md`](architecture.md).
+Why the _Debug Shell_ is built the way it is.  Each record captures the context, the decision, and its consequences.  Keep the log describing the decisions that apply to the current code, free of superseded or abandoned experiments.  For the resulting structure see [`architecture.md`](architecture.md).
 
 ## ADR-0001: The wrapper launches FS-UAE; it does not attach
 

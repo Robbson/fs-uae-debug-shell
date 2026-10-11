@@ -5,11 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fs_uae_debug_wrapper.app import Application
-from fs_uae_debug_wrapper.config import AppConfig
-from fs_uae_debug_wrapper.eventlog import EventLogError
-from fs_uae_debug_wrapper.parser import DebuggerOutputParser, EventType, parse_line
-from fs_uae_debug_wrapper.session import SessionState
+from fs_uae_debug_shell.app import Application
+from fs_uae_debug_shell.config import AppConfig
+from fs_uae_debug_shell.eventlog import EventLogError
+from fs_uae_debug_shell.parser import DebuggerOutputParser, EventType, parse_line
+from fs_uae_debug_shell.session import SessionState
 
 HIT_LINE = "Memwatch 0: break at 00000574.W  W  0000005B PC=0000C28C CPUDW (000)"
 

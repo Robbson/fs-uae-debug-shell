@@ -5,8 +5,8 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 
-from fs_uae_debug_wrapper.eventlog import HEADER, CsvEventWriter, EventLogError
-from fs_uae_debug_wrapper.parser import WatchpointHit
+from fs_uae_debug_shell.eventlog import HEADER, CsvEventWriter, EventLogError
+from fs_uae_debug_shell.parser import WatchpointHit
 
 
 def make_hit(value: int = 0x5B) -> WatchpointHit:

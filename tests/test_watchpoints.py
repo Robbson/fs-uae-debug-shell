@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fs_uae_debug_wrapper.watchpoints import WatchpointManager
+from fs_uae_debug_shell.watchpoints import WatchpointManager
 
 
 class WatchpointManagerTests(unittest.TestCase):

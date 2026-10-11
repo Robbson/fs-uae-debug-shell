@@ -20,7 +20,7 @@ arguments must follow '--' so they are not interpreted by the wrapper."""
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="fs-uae-debug-wrapper",
+        prog="fs-uae-debug-shell",
         description="Interactive wrapper around the FS-UAE console debugger.",
         epilog=USAGE_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     config = parse_args(argv)
     configure_logging(config.verbose)
     if not config.fsuae_args:
-        logging.getLogger("fs_uae_debug_wrapper").warning(
+        logging.getLogger("fs_uae_debug_shell").warning(
             "no FS-UAE arguments supplied; FS-UAE will start with its defaults"
         )
     return Application(config).run()

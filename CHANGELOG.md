@@ -18,9 +18,9 @@ Add a short entry under `Unreleased` for every completed feature or behavioural 
 
 ### Added
 
-- Transparent interactive wrapper around the FS-UAE 3.2.35 console debugger: launches FS-UAE on a `pexpect` pseudo-terminal, forwards user input, and displays debugger output as it arrives.
+- Transparent interactive wrapper around the FS-UAE 3.3.0 console debugger: launches FS-UAE on a `pexpect` pseudo-terminal, forwards user input, and displays debugger output as it arrives.
 - Wrapper commands with a configurable prefix (default `:`): `:help`, `:status`, `:logwatch`, `:logoff`, `:quit`; all other input is forwarded to the debugger unchanged.
-- Incremental parser for the debugger output formats confirmed on FS-UAE 3.2.35 (activation, watchpoint definition, watchpoint hit, prompt).
+- Incremental parser for the debugger output formats confirmed on FS-UAE 3.3.0 (activation, watchpoint definition, watchpoint hit, prompt).
 - CSV watchpoint logging: append-only, UTF-8, header written on a new/empty file, every record flushed immediately.
 - Unit tests with real captured FS-UAE output fixtures.
-- Documentation: `README.md`, `docs/architecture.md`, `docs/decisions.md`, and `docs/fs-uae-debugger-output.md`.
+- Documentation: `README.md`, `docs/architecture.md`, `docs/decisions.md`, and `docs/debug-shell-output.md`.

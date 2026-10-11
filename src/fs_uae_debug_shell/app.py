@@ -16,7 +16,7 @@ from .session import Session, SessionError, SessionState
 from .terminal import Console
 from .watchpoints import WatchpointManager
 
-log = logging.getLogger("fs_uae_debug_wrapper")
+log = logging.getLogger("fs_uae_debug_shell")
 
 
 class Application:

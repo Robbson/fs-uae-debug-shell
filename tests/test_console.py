@@ -8,7 +8,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.input import DummyInput
 from prompt_toolkit.output import DummyOutput
 
-from fs_uae_debug_wrapper.terminal import Console
+from fs_uae_debug_shell.terminal import Console
 
 
 class ConsoleTests(unittest.TestCase):

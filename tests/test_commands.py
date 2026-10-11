@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fs_uae_debug_wrapper.commands import CommandDispatcher
-from fs_uae_debug_wrapper.watchpoints import WatchpointManager
+from fs_uae_debug_shell.commands import CommandDispatcher
+from fs_uae_debug_shell.watchpoints import WatchpointManager
 
 
 def make_dispatcher(case: unittest.TestCase, tmp: str) -> tuple[CommandDispatcher, WatchpointManager]:

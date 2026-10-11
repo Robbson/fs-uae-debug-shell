@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from fs_uae_debug_wrapper.parser import (
+from fs_uae_debug_shell.parser import (
     DebuggerOutputParser,
     EventType,
     parse_line,

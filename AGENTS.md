@@ -123,7 +123,7 @@ Keep documentation in step with the code. Update the relevant documents in the s
 | `README.md` | What the project does: install, usage, commands, limitations. |
 | `docs/architecture.md` | The structure of the project: modules, state model, data flow. |
 | `docs/decisions.md` | Why the structure and behaviour are as they are (decision records). |
-| `docs/fs-uae-debugger-output.md` | Verified FS-UAE debugger output formats and fixtures. |
+| `docs/debug-shell-output.md` | Verified FS-UAE debugger output formats and fixtures. |
 | `CHANGELOG.md` | What has changed, newest first. |
 
 Rules:
