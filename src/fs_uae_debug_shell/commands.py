@@ -6,6 +6,7 @@ import shlex
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .frames import FrameValueMode, FrameValueSelector
 from .output import OutputMode, OutputRouter
 
 
@@ -24,15 +25,20 @@ class CommandResult:
 
 HELP_TEXT = """\
 shell commands (prefix '{prefix}'):
-  {prefix}help                    show this help
-  {prefix}status                  show debugger state, output mode and log file
-  {prefix}output shell|log|both   route watchpoint hits (default: shell)
-  {prefix}logfile <file>          set the CSV log file name
-  {prefix}quit                    stop the emulator and exit the shell
+  {prefix}help                       show this help
+  {prefix}status                     show debugger state, output mode and log file
+  {prefix}output shell|log|both      route watchpoint hits (default: shell)
+  {prefix}logfile <file>             set the CSV log file name
+  {prefix}framevalues first|last|all keep which hit per frame and watchpoint
+                                     (default: first; ignored without a frame counter)
+  {prefix}quit                       stop the emulator and exit the shell
 All other input is forwarded to the FS-UAE debugger unchanged."""
 
-COMMANDS = ("help", "status", "output", "logfile", "quit")
-ARGUMENT_CHOICES: dict[str, tuple[str, ...]] = {"output": ("shell", "log", "both")}
+COMMANDS = ("help", "status", "output", "logfile", "framevalues", "quit")
+ARGUMENT_CHOICES: dict[str, tuple[str, ...]] = {
+    "output": ("shell", "log", "both"),
+    "framevalues": ("first", "last", "all"),
+}
 
 
 class CommandDispatcher:
@@ -43,10 +49,12 @@ class CommandDispatcher:
         *,
         prefix: str,
         output: OutputRouter,
+        frames: FrameValueSelector,
         status_provider: Callable[[], str],
     ) -> None:
         self.prefix = prefix
         self.output = output
+        self.frames = frames
         self._status_provider = status_provider
 
     def handles(self, line: str) -> bool:
@@ -108,6 +116,19 @@ class CommandDispatcher:
             raise UsageError(f"usage: {self.prefix}logfile <file>")
         self.output.set_logfile(args[0])
         return CommandResult(output=f"logfile: {self.output.display_name()}")
+
+    def _cmd_framevalues(self, args: list[str]) -> CommandResult:
+        usage = f"usage: {self.prefix}framevalues first|last|all"
+        if not args:
+            return CommandResult(output=f"frame values: {self.frames.mode.value}")
+        if len(args) != 1:
+            raise UsageError(usage)
+        try:
+            mode = FrameValueMode(args[0].lower())
+        except ValueError as exc:
+            raise UsageError(usage) from exc
+        self.frames.set_mode(mode)
+        return CommandResult(output=f"frame values: {mode.value}")
 
     def _cmd_quit(self, args: list[str]) -> CommandResult:
         if args:

@@ -51,6 +51,12 @@ class WrapperCompleterTests(unittest.TestCase):
     def test_output_argument_narrowing(self) -> None:
         self.assertEqual(complete(":output l"), ["log"])
 
+    def test_framevalues_command_completion(self) -> None:
+        self.assertIn("framevalues", complete(":fra"))
+
+    def test_framevalues_argument_choices(self) -> None:
+        self.assertEqual(complete(":framevalues "), ["first", "last", "all"])
+
     def test_no_argument_completion_for_no_argument_command(self) -> None:
         self.assertEqual(complete(":help "), [])
 

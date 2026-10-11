@@ -8,6 +8,7 @@ Add a short entry under `Unreleased` for every completed feature or behavioural 
 
 ### Added
 
+- `:framevalues first|last|all` to choose which write of each video frame and watchpoint is shown and logged for FS-UAE's enhanced hit output (which carries a frame counter); the default is `first`, and the classic output without a frame counter ignores the setting.
 - `prompt_toolkit`-based interactive input line with cursor movement (Left/Right), Home/End, Backspace/Delete, and in-memory command history; debugger output is rendered above the prompt with `patch_stdout()`, so asynchronous output cannot corrupt the line being typed.
 - Tab completion for shell command names and their parameters (`:output` choices, `:logfile` paths).
 - `:output shell|log|both` to route all watchpoint hits to the screen, the CSV log, or both (default `shell`). In `log` mode the watchpoint hit block is hidden on the terminal and a fixed-position status line shows a logged-event counter per watchpoint.

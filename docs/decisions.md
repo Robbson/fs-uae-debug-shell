@@ -89,3 +89,11 @@ Why the _Debug Shell_ is built the way it is.  Each record captures the context,
 **Decision.** Walk the chunk with a cursor and copy only the unfinished tail once at the end, leaving the recognised formats and byte-for-byte output unchanged.
 
 **Consequences.** Parsing a large chunk is a single pass.  Partial lines are still buffered across calls, and the prompt is still recognised without a trailing newline.
+
+## ADR-0012: Per-frame watchpoint value selection
+
+**Context.** The enhanced hit line prefixes each hit with a video-frame counter.  A frame can contain several writes to the same watchpoint (the game loop runs more often than frames are rendered), but the screen shows only one of those values.  Showing and logging every write produces far more rows than the rendered state, and neither the first nor the last write is universally the meaningful one.
+
+**Decision.** Group hits by `(frame, watchpoint)` and keep the `first`, `last`, or `all` of them (`FrameValueSelector` in `frames.py`), selected with `:framevalues` and defaulting to `first`.  `first` drops later occurrences in the same frame, `last` buffers the frame and emits one hit per watchpoint when the frame number changes, and `all` keeps every hit.  A hit without a frame counter (classic output) ignores the mode and is always emitted.  The selector is flushed on a frame boundary, on any other structured event, and at shutdown.
+
+**Consequences.** The terminal and the CSV log show the per-frame value the user chooses rather than every intermediate write, matching what is rendered and keeping logs small.  `last` is emitted when the next frame's first hit arrives, so it renders up to one frame late, and a sparse watchpoint's final value appears only at the next event or at shutdown.  The parser treats the frame counter as decimal; a hexadecimal counter would require a parser change first.

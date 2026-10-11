@@ -66,7 +66,7 @@ Memwatch <id>: break at <addr>.<size>  <access>  <value> PC=<pc> <trailer>
 
 ### Enhanced output
 
-FS-UAE can be configured to print watchpoint hits in an enhanced format.  It adds a leading hex counter and drops the `break at` wording:
+FS-UAE can be configured to print watchpoint hits in an enhanced format.  It adds a leading frame counter and drops the `break at` wording:
 
 ```text
 00000025 Memwatch 01: 00000574.W  W  000000AB PC=00001234 CPUDW (000)
@@ -82,7 +82,11 @@ FS-UAE can be configured to print watchpoint hits in an enhanced format.  It add
 
 The parser accepts both the original and the enhanced form.  The leading counter of the enhanced form is parsed as a decimal integer and captured as the `frame` column of the CSV log (empty for the original form).
 
-A hit is followed by the same register dump / disassembly / `Next PC` block as a manual activation, ending in the `>` prompt.  The shell parses the hit line and routes the block according to the current output mode: shown unchanged in `shell`/`both` mode, hidden on the terminal in `log` mode (where it is written to the log file instead).  The user decides whether and when to resume with `g`.
+A single frame can contain several hits of the same watchpoint (the game loop runs more often than frames are rendered).  The shell groups hits by `(frame, watchpoint)` and keeps the first, last, or all of them for display and logging, chosen with `:framevalues` (see `README.md` and ADR-0012); classic hits without a counter ignore that choice.  The shell buffers one frame for `last` and flushes it when the frame number changes, when another event arrives, or at shutdown.
+
+In the classic form a hit is followed by the same register dump / disassembly / `Next PC` block as a manual activation, ending in the `>` prompt.  The shell parses the hit line and routes the block according to the current output mode: shown unchanged in `shell`/`both` mode, hidden on the terminal in `log` mode (where it is written to the log file instead).  The user decides whether and when to resume with `g`.
+
+In the enhanced form, hits can appear as consecutive lines without an intervening block while the emulator keeps running, which is the stream that `:framevalues` groups by frame (the filtering only applies to the hit lines themselves).
 
 ## Terminal echo
 

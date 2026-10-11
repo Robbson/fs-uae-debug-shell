@@ -53,6 +53,7 @@ The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.r
 | `:status` | Show debugger state, output mode, log file, and counters. |
 | `:output shell\|log\|both` | Route all watchpoint hits (default: `shell`). |
 | `:logfile <file>` | Set the CSV log file name. |
+| `:framevalues first\|last\|all` | Keep which write of each frame per watchpoint (default: `first`; ignored for classic output). |
 | `:quit` | Stop the emulator and exit the shell. |
 
 ## Output routing
@@ -68,6 +69,30 @@ The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.r
 In `log` mode nothing from a watchpoint hit reaches the screen, so the shell keeps a fixed status line at the bottom with the running total of logged events and a counter per watchpoint. Because the hit block is hidden there, the prompt and that status line stay up while the game runs, so the counter is continuously visible and updates on every hit; a hit that is only logged still stops the emulator, exactly as the native debugger does.
 
 `:logfile <file>` sets the CSV file name; the default is `output_<timestamp>.csv` (with milliseconds, so two sessions never collide). The file is created **lazily**, on the first hit that is actually logged: until then the chosen name only exists in memory. If a user-supplied name already exists, an increasing numeric suffix is appended (for example `report_1.csv`, `report_2.csv`) so earlier logs are never overwritten. Changing `:logfile` starts a new file on the next logged hit.
+
+## Frame values (enhanced output)
+
+FS-UAE's enhanced watchpoint-hit output prefixes every hit with a video-frame counter. A frame can contain several writes to the same watchpoint because the game loop runs more often than frames are rendered, but the screen shows only one of those values. `:framevalues` chooses which writes per frame and watchpoint are shown and logged:
+
+| Value | Behaviour |
+| --- | --- |
+| `first` | Keep the first write of each watchpoint in a frame (default). |
+| `last` | Keep the last write of each watchpoint in a frame. |
+| `all` | Keep every write. |
+
+The classic hit output has no frame counter, so `:framevalues` is ignored there and every hit is used. `:status` reports the current setting. For this enhanced stream:
+
+```text
+00000164 Memwatch 01: 00000574.W  W  00000003 PC=0000B8A6 CPUDW (000)
+00000164 Memwatch 02: 00000576.W  W  00000093 PC=0000B8C2 CPUDW (000)
+00000165 Memwatch 02: 00000576.W  W  00000094 PC=0000C28C CPUDW (000)
+00000165 Memwatch 02: 00000576.W  W  00000095 PC=0000C28C CPUDW (000)
+00000165 Memwatch 02: 00000576.W  W  0000008E PC=0000C968 CPUDW (000)
+00000166 Memwatch 02: 00000576.W  W  0000008D PC=0000C28C CPUDW (000)
+00000166 Memwatch 02: 00000576.W  W  00000088 PC=0000C28C CPUDW (000)
+```
+
+`first` keeps `00000003`, `00000093`, `00000094`, and `0000008D`; `last` keeps `00000003`, `00000093`, `0000008E`, and `00000088`; `all` keeps every line.
 
 ## Watchpoint logging workflow
 
@@ -135,11 +160,11 @@ Unit tests (no emulator required):
 uv run python -m unittest discover -s tests
 ```
 
-They cover parsing (including partial/multi-line output), command dispatch and completion, output routing and log-file naming, CSV creation/append/error handling, console input state, and child-output handling. Parser tests use real captured output in `tests/fixtures/`.
+They cover parsing (including partial/multi-line output), per-frame hit selection, command dispatch and completion, output routing and log-file naming, CSV creation/append/error handling, console input state, and child-output handling. Parser tests use real captured output in `tests/fixtures/`.
 
 ### Checks
 
-- `uv run python -m unittest discover -s tests` — 101 tests, all passing.
+- `uv run python -m unittest discover -s tests` — 121 tests, all passing.
 - `uvx ruff check .` — clean.
 - No type checker (mypy/pyright) is configured in this project.
 

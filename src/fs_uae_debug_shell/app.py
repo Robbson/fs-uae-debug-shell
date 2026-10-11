@@ -16,6 +16,7 @@ from .commands import (
 )
 from .config import AppConfig
 from .eventlog import EventLogError
+from .frames import FrameValueSelector
 from .output import OutputRouter
 from .parser import DebuggerOutputParser, Event, EventType, Piece, WatchpointHit
 from .session import Session, SessionError, SessionState
@@ -32,6 +33,7 @@ class Application:
         self.session = Session(config.executable, config.fsuae_args)
         self.parser = DebuggerOutputParser()
         self.output = OutputRouter(base_dir=Path.cwd())
+        self.frames = FrameValueSelector()
         if console is not None:
             self.console = console
         else:
@@ -45,6 +47,7 @@ class Application:
         self.dispatcher = CommandDispatcher(
             prefix=config.prefix,
             output=self.output,
+            frames=self.frames,
             status_provider=self._status_text,
         )
 
@@ -116,6 +119,7 @@ class Application:
         return self.output.show_counters
 
     def _shutdown(self) -> None:
+        self._flush_pending_frames()
         self.output.close()
         self.session.close()
 
@@ -151,12 +155,14 @@ class Application:
     def _handle_piece(self, piece: Piece, out: list[str]) -> None:
         event = piece.event
         if event is not None and event.type is EventType.WATCHPOINT_HIT:
+            for emitted in self.frames.select(piece):
+                self._emit_hit(emitted, out)
             display = self.output.display_enabled
-            if display:
-                out.append(piece.text)
-            self._process_events([event], out)
             self._suppress_block = self.output.log_enabled and not display
             return
+        if event is not None:
+            # Any other structured event ends the current frame stream.
+            self._flush_frames(out)
         if event is not None and event.type is EventType.PROMPT:
             if not self._suppress_block and piece.text != ">":
                 out.append(piece.text)
@@ -168,6 +174,26 @@ class Application:
         out.append(piece.text)
         if event is not None:
             self._process_events([event], out)
+
+    def _emit_hit(self, piece: Piece, out: list[str]) -> None:
+        """Display and log a selected watchpoint hit."""
+
+        event = piece.event
+        if event is None or event.hit is None:
+            return
+        if self.output.display_enabled:
+            out.append(piece.text)
+        self._on_hit(event.hit, out)
+
+    def _flush_frames(self, out: list[str]) -> None:
+        for piece in self.frames.flush():
+            self._emit_hit(piece, out)
+
+    def _flush_pending_frames(self) -> None:
+        out: list[str] = []
+        self._flush_frames(out)
+        if out:
+            self.console.write("".join(out))
 
     def _stop_from_child(self) -> None:
         self._stopping = True
@@ -246,6 +272,7 @@ class Application:
             f"state: {self.state.value}",
             f"fs-uae: {self.config.executable} {args}".rstrip(),
             f"output: {self.output.mode.value}",
+            f"frame values: {self.frames.mode.value}",
         ]
         name = self.output.display_name()
         if not self.output.created:

@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from fs_uae_debug_shell.commands import CommandDispatcher
+from fs_uae_debug_shell.frames import FrameValueSelector
 from fs_uae_debug_shell.output import OutputMode, OutputRouter
 
 
@@ -18,6 +19,7 @@ def make_dispatcher(case: unittest.TestCase, tmp: str) -> tuple[CommandDispatche
     dispatcher = CommandDispatcher(
         prefix=":",
         output=router,
+        frames=FrameValueSelector(),
         status_provider=status,
     )
     return dispatcher, router
@@ -39,6 +41,7 @@ class CommandDispatcherTests(unittest.TestCase):
             self.assertIn("shell commands", result.output)
             self.assertIn("output", result.output)
             self.assertIn("logfile", result.output)
+            self.assertIn("framevalues", result.output)
 
     def test_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -121,6 +124,40 @@ class CommandDispatcherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             dispatcher, _ = make_dispatcher(self, tmp)
             result = dispatcher.dispatch(":logfile a.csv b.csv")
+            self.assertFalse(result.ok)
+
+    def test_framevalues_reports_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":framevalues")
+            self.assertTrue(result.ok)
+            self.assertEqual(result.output, "frame values: first")
+
+    def test_framevalues_sets_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            for value in ("last", "all", "first"):
+                result = dispatcher.dispatch(f":framevalues {value}")
+                self.assertTrue(result.ok, result.output)
+                self.assertEqual(dispatcher.frames.mode.value, value)
+
+    def test_framevalues_is_case_insensitive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":framevalues ALL")
+            self.assertTrue(result.ok)
+            self.assertEqual(dispatcher.frames.mode.value, "all")
+
+    def test_framevalues_invalid_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":framevalues sometimes")
+            self.assertFalse(result.ok)
+
+    def test_framevalues_too_many_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":framevalues first last")
             self.assertFalse(result.ok)
 
     def test_quit(self) -> None:

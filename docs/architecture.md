@@ -15,7 +15,7 @@ The shell launches FS-UAE as a child process on a pseudo-terminal (PTY) and owns
 
  fs-uae ──▶ Session (PTY) ─▶ Application ─┬─▶ Console (patch_stdout + status line)
                                           └─▶ DebuggerOutputParser ─▶ events
-                                                                       └─▶ OutputRouter ─▶ CsvEventWriter
+                                                                       └─▶ FrameValueSelector ─▶ OutputRouter ─▶ CsvEventWriter
 ```
 
 ## Modules
@@ -29,6 +29,7 @@ The shell launches FS-UAE as a child process on a pseudo-terminal (PTY) and owns
 | `src/fs_uae_debug_shell/session.py` | FS-UAE process ownership over a `pexpect` PTY; `SessionState`. |
 | `src/fs_uae_debug_shell/terminal.py` | Interactive prompt via `prompt_toolkit`: line editing/history, completion (`WrapperCompleter`), `patch_stdout` output and the status line (`Console`). |
 | `src/fs_uae_debug_shell/parser.py` | Incremental debugger output parser and event types. |
+| `src/fs_uae_debug_shell/frames.py` | Per-frame selection of watchpoint hits (`FrameValueMode`, `FrameValueSelector`). |
 | `src/fs_uae_debug_shell/commands.py` | Shell command parsing, dispatch, and the completion tables. |
 | `src/fs_uae_debug_shell/output.py` | Output routing: `OutputMode`, log-file naming, lazy CSV creation, per-watchpoint counters. |
 | `src/fs_uae_debug_shell/eventlog.py` | Append-only CSV event writer. |
@@ -40,7 +41,7 @@ The shell launches FS-UAE as a child process on a pseudo-terminal (PTY) and owns
 1. `Session.start` spawns FS-UAE on a PTY with child echo disabled.
 2. `Application._run_async` registers the child PTY fd with `loop.add_reader` and enters `Console.patched_stdout()`.
 3. Child output: the reader callback decodes the text and passes it to `DebuggerOutputParser.feed_pieces`, which returns `Piece`s in order (the exact text plus any structured `Event`). Everything produced by one read is written to the terminal in a single `Console.write` call.
-4. `Application._handle_piece` routes each piece. Watchpoint hit output is shown and/or hidden according to `OutputRouter.display_enabled`; every hit is passed to `_process_events`, which updates debugger definitions, tracks the prompt, and records the hit.
+4. `Application._handle_piece` routes each piece. Watchpoint hits pass through `FrameValueSelector`, which keeps the chosen value per frame and watchpoint (`:framevalues`); the selected hits are shown and/or logged according to `OutputRouter`. `_process_events` updates debugger definitions and tracks the prompt.
 5. Input: `Console.prompt_async` returns one edited line. `Application` dispatches lines starting with the shell prefix to `CommandDispatcher`; everything else is written to the child PTY unchanged.
 
 The interactive prompt is only raised while the debugger is idle at its own `>` prompt (see below) — except in `log` mode, where it stays up for the status line — so the bulk of debugger output is written directly rather than repainted above a prompt.
@@ -84,7 +85,17 @@ The parser is incremental: it buffers partial lines across `feed_pieces()` calls
 
 `Application._on_hit` records the hit and, when logging, refreshes the status line. On a write failure the error is reported and the emulator is simply left stopped. Emulation is **never** resumed automatically; the user sends `g` (or any other command) themselves.
 
-`CommandDispatcher` provides `:output` and `:logfile` to change those settings, plus `:help`, `:status`, and `:quit`.
+`CommandDispatcher` provides `:output`, `:logfile`, and `:framevalues` to change those settings, plus `:help`, `:status`, and `:quit`.
+
+## Frame value selection
+
+The enhanced hit line carries a leading video-frame counter. A single frame can contain several writes to the same watchpoint because the game loop runs more often than frames are rendered, and only one of those values is normally shown on screen. `FrameValueSelector` (`frames.py`) groups hits by `(frame, watchpoint)` and keeps the `first`, `last`, or `all` of them according to `FrameValueMode`, chosen with `:framevalues` (default `first`):
+
+- `first` emits the first occurrence of each watchpoint in a frame and drops the rest;
+- `last` buffers a frame and emits one hit per watchpoint when the frame number changes;
+- `all` emits every hit.
+
+A hit without a frame counter (classic output) is always emitted and ignores the mode. The selector is flushed when a frame ends, when any other structured event arrives (for example the debugger prompt), and at shutdown, so a buffered frame is never lost.
 
 ## Interactive input
 

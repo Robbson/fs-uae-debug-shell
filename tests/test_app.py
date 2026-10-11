@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fs_uae_debug_shell.app import Application
 from fs_uae_debug_shell.config import AppConfig
+from fs_uae_debug_shell.frames import FrameValueMode
 from fs_uae_debug_shell.output import OutputMode
 from fs_uae_debug_shell.parser import DebuggerOutputParser, EventType, parse_line
 from fs_uae_debug_shell.session import SessionState
@@ -22,6 +23,8 @@ DUMP = (
     "  D0 00000F30   D1 00000028   D2 0000FFFF   D3 00000000\n"
     "Next PC: 00008a6e\n"
 )
+FIXTURES = Path(__file__).parent / "fixtures"
+ENHANCED_FRAMES = (FIXTURES / "enhanced_frames.txt").read_text(encoding="latin-1")
 
 
 class FakeSession:
@@ -203,6 +206,7 @@ class OutputRoutingTests(unittest.TestCase):
             )
             text = app._status_text()
             self.assertIn("output: both", text)
+            self.assertIn("frame values: first", text)
             self.assertIn("logged events: 1", text)
             self.assertIn("game.csv", text)
             self.assertIn("debugger watchpoints:", text)
@@ -214,6 +218,67 @@ class OutputRoutingTests(unittest.TestCase):
             app._process_events([hit_event(), prompt_event()])
             assert isinstance(app.session, FakeSession)
             self.assertEqual(app.session.sent, [])
+
+
+class FrameValueTests(unittest.TestCase):
+    def test_default_first_filters_terminal_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._consume_output(ENHANCED_FRAMES)
+            app._flush_pending_frames()
+            assert isinstance(app.console, FakeConsole)
+            shown = [
+                line for line in app.console.data.splitlines() if "Memwatch" in line
+            ]
+            self.assertEqual(len(shown), 4)
+            self.assertIn("00000094", app.console.data)
+            self.assertNotIn("00000095", app.console.data)
+
+    def test_all_mode_shows_every_hit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app.frames.set_mode(FrameValueMode.ALL)
+            app._consume_output(ENHANCED_FRAMES)
+            shown = [
+                line for line in app.console.data.splitlines() if "Memwatch" in line
+            ]
+            self.assertEqual(len(shown), 11)
+
+    def test_last_mode_logs_selected_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app.output.set_mode(OutputMode.LOG)
+            app.frames.set_mode(FrameValueMode.LAST)
+            app._consume_output(ENHANCED_FRAMES)
+            app._flush_pending_frames()
+            contents = (Path(tmp) / "game.csv").read_text(encoding="utf-8")
+            self.assertEqual(app.output.total, 4)
+            self.assertIn("0x0000008E", contents)
+            self.assertNotIn("0x0000008D", contents)
+
+    def test_prompt_flushes_buffered_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app.frames.set_mode(FrameValueMode.LAST)
+            app._consume_output(ENHANCED_FRAMES)
+            app._consume_output(">")
+            assert isinstance(app.console, FakeConsole)
+            self.assertIn("00000088", app.console.data)
+            self.assertEqual(app.frames.flush(), [])
+
+    def test_classic_output_ignores_frame_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app.frames.set_mode(FrameValueMode.FIRST)
+            text = (
+                "Memwatch 0: break at 00000574.W  W  0000005B PC=0000C28C CPUDW (000)\n"
+                "Memwatch 0: break at 00000574.W  W  0000005C PC=0000C28C CPUDW (000)\n"
+            )
+            app._consume_output(text)
+            shown = [
+                line for line in app.console.data.splitlines() if "Memwatch" in line
+            ]
+            self.assertEqual(len(shown), 2)
 
 
 class InputHandlingTests(unittest.TestCase):
