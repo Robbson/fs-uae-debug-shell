@@ -28,6 +28,7 @@ class ParseLineTests(unittest.TestCase):
         self.assertEqual(hit.value, 0x5B)
         self.assertEqual(hit.pc, 0x0000C28C)
         self.assertEqual(hit.trailer, "CPUDW (000)")
+        self.assertIsNone(hit.frame)
 
     def test_watchpoint_hit_read_access(self) -> None:
         event = parse_line(
@@ -38,6 +39,51 @@ class ParseLineTests(unittest.TestCase):
         self.assertEqual(event.hit.size, "B")
         self.assertEqual(event.hit.access, "R")
         self.assertEqual(event.hit.address, 0x12345)
+
+    def test_watchpoint_hit_long_size_with_extra_spaces(self) -> None:
+        event = parse_line(
+            "Memwatch 1: break at 00000574.L  W  000300AB  PC=00001234 CPUDW (000)"
+        )
+        self.assertIsNotNone(event)
+        assert event is not None and event.hit is not None
+        self.assertEqual(event.hit.watchpoint, 1)
+        self.assertEqual(event.hit.size, "L")
+        self.assertEqual(event.hit.value, 0x300AB)
+        self.assertEqual(event.hit.pc, 0x1234)
+
+    def test_watchpoint_hit_enhanced_format(self) -> None:
+        event = parse_line(
+            "00000025 Memwatch 01: 00000574.W  W  000000AB PC=00001234 CPUDW (000)"
+        )
+        self.assertIsNotNone(event)
+        assert event is not None and event.hit is not None
+        self.assertEqual(event.type, EventType.WATCHPOINT_HIT)
+        hit = event.hit
+        self.assertEqual(hit.watchpoint, 1)
+        self.assertEqual(hit.address, 0x574)
+        self.assertEqual(hit.size, "W")
+        self.assertEqual(hit.access, "W")
+        self.assertEqual(hit.value, 0xAB)
+        self.assertEqual(hit.pc, 0x1234)
+        self.assertEqual(hit.trailer, "CPUDW (000)")
+        self.assertEqual(hit.frame, 25)
+
+    def test_both_hit_formats_agree(self) -> None:
+        original = parse_line(
+            "Memwatch 1: break at 00000574.W  W  000000AB PC=00001234 CPUDW (000)"
+        )
+        enhanced = parse_line(
+            "00000025 Memwatch 01: 00000574.W  W  000000AB PC=00001234 CPUDW (000)"
+        )
+        assert original is not None and original.hit is not None
+        assert enhanced is not None and enhanced.hit is not None
+        self.assertEqual(original.hit.watchpoint, enhanced.hit.watchpoint)
+        self.assertEqual(original.hit.address, enhanced.hit.address)
+        self.assertEqual(original.hit.size, enhanced.hit.size)
+        self.assertEqual(original.hit.access, enhanced.hit.access)
+        self.assertEqual(original.hit.value, enhanced.hit.value)
+        self.assertEqual(original.hit.pc, enhanced.hit.pc)
+        self.assertEqual(original.hit.trailer, enhanced.hit.trailer)
 
     def test_activation_line(self) -> None:
         event = parse_line("WARNING: Activated debugger")
@@ -149,6 +195,21 @@ class ParserStreamTests(unittest.TestCase):
         assert pieces[0].event is not None
         self.assertEqual(pieces[0].event.type, EventType.WATCHPOINT_HIT)
         self.assertEqual(pieces[0].text, line + "\r\n")
+
+    def test_feed_pieces_enhanced_hit(self) -> None:
+        line = "00000025 Memwatch 01: 00000574.W  W  000000AB PC=00001234 CPUDW (000)"
+        pieces = DebuggerOutputParser().feed_pieces(line + "\r\n")
+        self.assertEqual(len(pieces), 1)
+        assert pieces[0].event is not None
+        self.assertEqual(pieces[0].event.type, EventType.WATCHPOINT_HIT)
+        self.assertEqual(pieces[0].text, line + "\r\n")
+
+    def test_partial_enhanced_line_is_buffered(self) -> None:
+        parser = DebuggerOutputParser()
+        self.assertEqual(parser.feed("00000025 Memwatch 01: 00000574."), [])
+        events = parser.feed("W  W  000000AB PC=00001234 CPUDW (000)\r\n")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].type, EventType.WATCHPOINT_HIT)
 
     def test_feed_pieces_prompt_without_newline_is_own_piece(self) -> None:
         pieces = DebuggerOutputParser().feed_pieces("Next PC: 00008a6e\n>")

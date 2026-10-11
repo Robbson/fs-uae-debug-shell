@@ -1,8 +1,8 @@
 """FS-UAE console-debugger output parsing.
 
-The formats implemented here were confirmed against real FS-UAE 3.2.35
-sessions (see ``tests/fixtures``).  Nothing is inferred from WinUAE-only
-behaviour.
+The formats implemented here were confirmed against real FS-UAE sessions (see
+``tests/fixtures``).  Both the original and the enhanced watchpoint-hit output
+are recognised; nothing is inferred from WinUAE-only behaviour.
 """
 
 from __future__ import annotations
@@ -24,7 +24,11 @@ class EventType(Enum):
 
 @dataclass(frozen=True)
 class WatchpointHit:
-    """A parsed ``Memwatch <n>: break at ...`` line."""
+    """A parsed ``Memwatch <n>: break at ...`` line.
+
+    ``frame`` is the decimal frame counter of the enhanced output format, or
+    ``None`` when the original format (which has no counter) was seen.
+    """
 
     watchpoint: int
     address: int
@@ -34,6 +38,7 @@ class WatchpointHit:
     pc: int
     trailer: str
     raw: str
+    frame: int | None = None
 
 
 @dataclass(frozen=True)
@@ -73,10 +78,14 @@ class Piece:
     event: Event | None = None
 
 
-# Confirmed format from a real session:
-#   Memwatch 0: break at 00000574.W  W  0000005B PC=0000C28C CPUDW (000)
+# Confirmed hit formats from real sessions:
+#   original (enhanced output off):
+#     Memwatch 1: break at 00000574.L  W  000300AB  PC=00001234 CPUDW (000)
+#   enhanced output on, with a leading decimal frame counter and no "break at":
+#     00000025 Memwatch 01: 00000574.W  W  000000AB PC=00001234 CPUDW (000)
 _HIT_RE = re.compile(
-    r"^Memwatch\s+(?P<num>\d+):\s+break at\s+"
+    r"^(?:(?P<frame>[0-9]{4,})\s+)?Memwatch\s+(?P<num>\d+):\s+"
+    r"(?:break at\s+)?"
     r"(?P<addr>[0-9A-Fa-f]+)\.(?P<size>\S+)\s+"
     r"(?P<access>\S+)\s+(?P<value>[0-9A-Fa-f]+)\s+"
     r"PC=(?P<pc>[0-9A-Fa-f]+)\s*(?P<trailer>.*)$"
@@ -106,6 +115,7 @@ def parse_line(line: str) -> Event | None:
 
     match = _HIT_RE.match(stripped)
     if match is not None:
+        frame = match["frame"]
         hit = WatchpointHit(
             watchpoint=int(match["num"]),
             address=int(match["addr"], 16),
@@ -115,6 +125,7 @@ def parse_line(line: str) -> Event | None:
             pc=int(match["pc"], 16),
             trailer=match["trailer"],
             raw=stripped,
+            frame=int(frame, 10) if frame is not None else None,
         )
         return Event(EventType.WATCHPOINT_HIT, line=stripped, hit=hit)
 

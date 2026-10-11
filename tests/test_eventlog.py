@@ -9,7 +9,7 @@ from fs_uae_debug_shell.eventlog import HEADER, CsvEventWriter, EventLogError
 from fs_uae_debug_shell.parser import WatchpointHit
 
 
-def make_hit(value: int = 0x5B) -> WatchpointHit:
+def make_hit(value: int = 0x5B, frame: int | None = None) -> WatchpointHit:
     return WatchpointHit(
         watchpoint=0,
         address=0x574,
@@ -19,6 +19,7 @@ def make_hit(value: int = 0x5B) -> WatchpointHit:
         pc=0xC28C,
         trailer="CPUDW (000)",
         raw="Memwatch 0: break at 00000574.W  W  0000005B PC=0000C28C CPUDW (000)",
+        frame=frame,
     )
 
 
@@ -46,6 +47,7 @@ class CsvEventWriterTests(unittest.TestCase):
                 lines[1].split(","),
                 [
                     "2026-10-10T12:00:00.000",
+                    "",
                     "0",
                     "0x00000574",
                     "W",
@@ -54,7 +56,17 @@ class CsvEventWriterTests(unittest.TestCase):
                     "0x0000C28C",
                 ],
             )
-            self.assertEqual(lines[2].split(",")[5], "0x0000005C")
+            self.assertEqual(lines[2].split(",")[6], "0x0000005C")
+
+    def test_frame_column_is_recorded_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "score.csv"
+            writer = CsvEventWriter(path)
+            ts = datetime(2026, 10, 10, 12, 0, 0)
+            writer.append(make_hit(0x5B, frame=25), timestamp=ts)
+            writer.close()
+            row = path.read_text(encoding="utf-8").splitlines()[1].split(",")
+            self.assertEqual(row[1], "25")
 
     def test_reopen_does_not_duplicate_header(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

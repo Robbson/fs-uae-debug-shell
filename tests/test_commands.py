@@ -5,23 +5,22 @@ import unittest
 from pathlib import Path
 
 from fs_uae_debug_shell.commands import CommandDispatcher
-from fs_uae_debug_shell.watchpoints import WatchpointManager
+from fs_uae_debug_shell.output import OutputMode, OutputRouter
 
 
-def make_dispatcher(case: unittest.TestCase, tmp: str) -> tuple[CommandDispatcher, WatchpointManager]:
-    manager = WatchpointManager()
-    case.addCleanup(manager.close)
+def make_dispatcher(case: unittest.TestCase, tmp: str) -> tuple[CommandDispatcher, OutputRouter]:
+    router = OutputRouter(Path(tmp))
+    case.addCleanup(router.close)
 
     def status() -> str:
         return "state: stopped"
 
     dispatcher = CommandDispatcher(
         prefix=":",
-        manager=manager,
+        output=router,
         status_provider=status,
-        base_dir=Path(tmp),
     )
-    return dispatcher, manager
+    return dispatcher, router
 
 
 class CommandDispatcherTests(unittest.TestCase):
@@ -37,8 +36,9 @@ class CommandDispatcherTests(unittest.TestCase):
             dispatcher, _ = make_dispatcher(self, tmp)
             result = dispatcher.dispatch(":help")
             self.assertTrue(result.ok)
-            self.assertIn("wrapper commands", result.output)
-            self.assertIn("logwatch", result.output)
+            self.assertIn("shell commands", result.output)
+            self.assertIn("output", result.output)
+            self.assertIn("logfile", result.output)
 
     def test_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -60,63 +60,74 @@ class CommandDispatcherTests(unittest.TestCase):
             result = dispatcher.dispatch(":")
             self.assertFalse(result.ok)
 
-    def test_logwatch_and_logoff(self) -> None:
+    def test_output_reports_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            dispatcher, manager = make_dispatcher(self, tmp)
-            result = dispatcher.dispatch(":logwatch 0 score.csv")
-            self.assertTrue(result.ok, result.output)
-            self.assertIsNotNone(manager.get(0))
-
-            result = dispatcher.dispatch(":logoff 0")
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":output")
             self.assertTrue(result.ok)
-            self.assertIsNone(manager.get(0))
+            self.assertEqual(result.output, "output: shell")
 
-    def test_logwatch_invalid_id(self) -> None:
+    def test_output_sets_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, router = make_dispatcher(self, tmp)
+            for value in ("log", "both", "shell"):
+                result = dispatcher.dispatch(f":output {value}")
+                self.assertTrue(result.ok, result.output)
+                self.assertIs(router.mode, OutputMode(value))
+
+    def test_output_is_case_insensitive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, router = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":output BOTH")
+            self.assertTrue(result.ok)
+            self.assertIs(router.mode, OutputMode.BOTH)
+
+    def test_output_invalid_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             dispatcher, _ = make_dispatcher(self, tmp)
-            result = dispatcher.dispatch(":logwatch notanumber score.csv")
+            result = dispatcher.dispatch(":output screen")
             self.assertFalse(result.ok)
 
-    def test_logwatch_wrong_arity(self) -> None:
+    def test_output_too_many_args(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             dispatcher, _ = make_dispatcher(self, tmp)
-            result = dispatcher.dispatch(":logwatch 0")
+            result = dispatcher.dispatch(":output log both")
             self.assertFalse(result.ok)
 
-    def test_logwatch_bad_path(self) -> None:
+    def test_logfile_reports_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             dispatcher, _ = make_dispatcher(self, tmp)
-            result = dispatcher.dispatch(":logwatch 0 missing/score.csv")
-            self.assertFalse(result.ok)
+            result = dispatcher.dispatch(":logfile")
+            self.assertTrue(result.ok)
+            self.assertIn("output_", result.output)
+            self.assertIn(".csv", result.output)
 
-    def test_logoff_unknown(self) -> None:
+    def test_logfile_sets_name_without_creating_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, router = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":logfile game.csv")
+            self.assertTrue(result.ok, result.output)
+            self.assertEqual(Path(tmp, "game.csv").exists(), False)
+            self.assertFalse(router.created)
+
+    def test_logfile_quoted_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, router = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(':logfile "my log.csv"')
+            self.assertTrue(result.ok, result.output)
+            self.assertTrue(router.display_name().endswith("my log.csv"))
+
+    def test_logfile_wrong_arity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             dispatcher, _ = make_dispatcher(self, tmp)
-            result = dispatcher.dispatch(":logoff 9")
+            result = dispatcher.dispatch(":logfile a.csv b.csv")
             self.assertFalse(result.ok)
-
-    def test_logwatch_relative_resolves_to_base_dir(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            dispatcher, manager = make_dispatcher(self, tmp)
-            dispatcher.dispatch(":logwatch 1 sub.csv")
-            config = manager.get(1)
-            assert config is not None
-            self.assertEqual(config.path, Path(tmp) / "sub.csv")
 
     def test_quit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             dispatcher, _ = make_dispatcher(self, tmp)
             result = dispatcher.dispatch(":quit")
             self.assertTrue(result.quit)
-
-    def test_quoted_path(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            dispatcher, manager = make_dispatcher(self, tmp)
-            result = dispatcher.dispatch(':logwatch 0 "my log.csv"')
-            self.assertTrue(result.ok, result.output)
-            config = manager.get(0)
-            assert config is not None
-            self.assertEqual(config.path.name, "my log.csv")
 
 
 if __name__ == "__main__":

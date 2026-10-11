@@ -64,7 +64,25 @@ Memwatch <id>: break at <addr>.<size>  <access>  <value> PC=<pc> <trailer>
 - `<pc>`: 8 hex digits.
 - `<trailer>`: informational only (observed `CPUDW (000)`).
 
-A hit is followed by the same register dump / disassembly / `Next PC` block as a manual activation, ending in the `>` prompt.  The wrapper logs the hit and displays this block unchanged; the user decides whether and when to resume with `g`.
+### Enhanced output
+
+FS-UAE can be configured to print watchpoint hits in an enhanced format.  It adds a leading hex counter and drops the `break at` wording:
+
+```text
+00000025 Memwatch 01: 00000574.W  W  000000AB PC=00001234 CPUDW (000)
+```
+
+```text
+<counter> Memwatch <id>: <addr>.<size>  <access>  <value> PC=<pc> <trailer>
+```
+
+- `<counter>`: a leading decimal frame counter (observed eight digits, zero padded).
+- `<id>`: the watchpoint id, which may be zero padded in this format.
+- The remaining fields are identical to the original format.
+
+The parser accepts both the original and the enhanced form.  The leading counter of the enhanced form is parsed as a decimal integer and captured as the `frame` column of the CSV log (empty for the original form).
+
+A hit is followed by the same register dump / disassembly / `Next PC` block as a manual activation, ending in the `>` prompt.  The shell parses the hit line and routes the block according to the current output mode: shown unchanged in `shell`/`both` mode, hidden on the terminal in `log` mode (where it is written to the log file instead).  The user decides whether and when to resume with `g`.
 
 ## Terminal echo
 

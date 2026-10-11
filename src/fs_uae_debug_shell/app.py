@@ -1,4 +1,4 @@
-"""Application orchestration: the transparent wrapper loop."""
+"""Application orchestration: the transparent shell loop."""
 
 from __future__ import annotations
 
@@ -8,13 +8,18 @@ import os
 import sys
 from pathlib import Path
 
-from .commands import CommandDispatcher, CommandResult
+from .commands import (
+    ARGUMENT_CHOICES,
+    COMMANDS,
+    CommandDispatcher,
+    CommandResult,
+)
 from .config import AppConfig
 from .eventlog import EventLogError
+from .output import OutputRouter
 from .parser import DebuggerOutputParser, Event, EventType, Piece, WatchpointHit
 from .session import Session, SessionError, SessionState
-from .terminal import Console
-from .watchpoints import WatchpointManager
+from .terminal import Console, WrapperCompleter
 
 log = logging.getLogger("fs_uae_debug_shell")
 
@@ -26,17 +31,20 @@ class Application:
         self.config = config
         self.session = Session(config.executable, config.fsuae_args)
         self.parser = DebuggerOutputParser()
-        self.watchpoints = WatchpointManager()
-        self.console = console if console is not None else Console()
+        self.output = OutputRouter(base_dir=Path.cwd())
+        if console is not None:
+            self.console = console
+        else:
+            completer = WrapperCompleter(config.prefix, COMMANDS, ARGUMENT_CHOICES)
+            self.console = Console(completer=completer)
         self.state = SessionState.RUNNING
-        self._at_prompt = False
         self._stopping = False
+        self._suppress_block = False
         self._definitions: dict[int, str] = {}
         self.dispatcher = CommandDispatcher(
             prefix=config.prefix,
-            manager=self.watchpoints,
+            output=self.output,
             status_provider=self._status_text,
-            base_dir=Path.cwd(),
         )
 
     # -- lifecycle -----------------------------------------------------------
@@ -71,8 +79,11 @@ class Application:
     async def _input_loop(self) -> None:
         while not self._stopping and self.session.alive():
             self.session.set_dimensions(*Console.size())
+            toolbar = self._toolbar_text if self.output.show_counters else None
             try:
-                line = await self.console.prompt_async()
+                line = await self.console.prompt_async(
+                    message="> ", bottom_toolbar=toolbar
+                )
             except EOFError:
                 break
             except KeyboardInterrupt:
@@ -83,7 +94,7 @@ class Application:
             self._handle_line(line)
 
     def _shutdown(self) -> None:
-        self.watchpoints.close()
+        self.output.close()
         self.session.close()
 
     # -- child output --------------------------------------------------------
@@ -113,9 +124,25 @@ class Application:
             self._handle_piece(piece)
 
     def _handle_piece(self, piece: Piece) -> None:
+        event = piece.event
+        if event is not None and event.type is EventType.WATCHPOINT_HIT:
+            display = self.output.display_enabled
+            if display:
+                self._write(piece.text)
+            self._process_events([event])
+            self._suppress_block = self.output.log_enabled and not display
+            return
+        if event is not None and event.type is EventType.PROMPT:
+            if not self._suppress_block and piece.text != ">":
+                self._write(piece.text)
+            self._suppress_block = False
+            self._process_events([event])
+            return
+        if self._suppress_block:
+            return
         self._write(piece.text)
-        if piece.event is not None:
-            self._process_events([piece.event])
+        if event is not None:
+            self._process_events([event])
 
     def _stop_from_child(self) -> None:
         self._stopping = True
@@ -124,13 +151,9 @@ class Application:
     def _process_events(self, events: list[Event]) -> None:
         for event in events:
             if event.type is EventType.WATCHPOINT_HIT and event.hit is not None:
-                self._at_prompt = False
                 self._on_hit(event.hit)
             elif event.type is EventType.DEBUGGER_ACTIVATED:
                 self.state = SessionState.STOPPED
-                self._at_prompt = False
-            elif event.type is EventType.PROMPT:
-                self._at_prompt = True
             elif event.type is EventType.WATCHPOINT_DEFINED and event.definition is not None:
                 definition = event.definition
                 self._definitions[definition.watchpoint] = (
@@ -140,21 +163,16 @@ class Application:
 
     def _on_hit(self, hit: WatchpointHit) -> None:
         self.state = SessionState.STOPPED
-        config = self.watchpoints.get(hit.watchpoint)
-        if config is None:
-            self._write(
-                f"\n[wrapper] watchpoint {hit.watchpoint} hit at "
-                f"{hit.address:08X}.{hit.size} {hit.access} value={hit.value:08X} "
-                f"pc={hit.pc:08X} (not logging)\n"
-            )
-            return
         try:
-            config.writer.append(hit)
+            self.output.record(hit)
         except EventLogError as exc:
             log.error("%s", exc)
             self._write(
                 f"\n[wrapper] error: failed to log watchpoint {hit.watchpoint}: {exc}\n"
             )
+            return
+        if self.output.log_enabled:
+            self.console.refresh()
 
     # -- user input ----------------------------------------------------------
 
@@ -164,11 +182,7 @@ class Application:
             self._write(f"\n[wrapper] {result.output}\n")
             if result.quit:
                 self._stopping = True
-                return
-            if self._at_prompt:
-                self._write(">")
             return
-        self._at_prompt = False
         self._send_commands((text,))
 
     def _send_commands(self, commands: tuple[str, ...]) -> None:
@@ -181,7 +195,6 @@ class Application:
                 log.error("forwarding command failed: %s", exc)
 
     def _forward_raw(self, data: bytes) -> None:
-        self._at_prompt = False
         try:
             self.session.send_bytes(data)
         except SessionError as exc:
@@ -190,22 +203,38 @@ class Application:
     # -- helpers -------------------------------------------------------------
 
     def _status_text(self) -> str:
+        args = " ".join(self.config.fsuae_args)
         lines = [
             f"state: {self.state.value}",
-            f"fs-uae: {self.config.executable} {' '.join(self.config.fsuae_args)}".rstrip(),
+            f"fs-uae: {self.config.executable} {args}".rstrip(),
+            f"output: {self.output.mode.value}",
         ]
-        configs = self.watchpoints.configs()
-        if configs:
-            lines.append("logging watchpoints:")
-            for config in configs:
-                lines.append(f"  {config.watchpoint} -> {config.path}")
-        else:
-            lines.append("logging watchpoints: none")
+        name = self.output.display_name()
+        if not self.output.created:
+            name = f"{name} (not created yet)"
+        lines.append(f"logfile: {name}")
+        counts = self.output.counts()
+        if counts:
+            lines.append(f"logged events: {self.output.total}")
+            for watchpoint in sorted(counts):
+                lines.append(f"  wp{watchpoint}: {counts[watchpoint]}")
         if self._definitions:
             lines.append("debugger watchpoints:")
             for key in sorted(self._definitions):
                 lines.append(f"  {key}: {self._definitions[key]}")
         return "\n".join(lines)
+
+    def _toolbar_text(self) -> str:
+        name = Path(self.output.display_name()).name
+        text = f"log -> {name}  |  logged: {self.output.total}"
+        counts = self.output.counts()
+        if counts:
+            parts = "  ".join(
+                f"wp{watchpoint}: {count}"
+                for watchpoint, count in sorted(counts.items())
+            )
+            text += f"  |  {parts}"
+        return text
 
     def _write(self, text: str) -> None:
         self.console.write(text)
@@ -217,6 +246,6 @@ class Application:
             + (f" ({args})" if args else "")
             + "; activate the debugger with F12+D when the game is running.\n"
             f"[wrapper] type '{self.config.prefix}help' at the debugger prompt "
-            "for wrapper commands.\n"
+            "for shell commands.\n"
         )
         sys.stderr.flush()

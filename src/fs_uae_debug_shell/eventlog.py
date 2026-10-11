@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .parser import WatchpointHit
 
-HEADER = ["timestamp", "wp", "address", "size", "access", "value", "pc"]
+HEADER = ["timestamp", "frame", "wp", "address", "size", "access", "value", "pc"]
 
 
 class EventLogError(RuntimeError):
@@ -52,6 +52,7 @@ class CsvEventWriter:
         moment = timestamp if timestamp is not None else datetime.now()
         row = [
             moment.isoformat(timespec="milliseconds"),
+            hit.frame if hit.frame is not None else "",
             hit.watchpoint,
             _hex(hit.address),
             hit.size,

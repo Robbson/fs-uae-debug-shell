@@ -35,20 +35,24 @@ These hold for the whole life of the project and must not be tied to a particula
 - Reserve a configurable prefix (default `:`) for wrapper-specific commands; they must never reach the emulator.
 - Validate arguments and report useful errors.
 - Keep wrapper commands out of the FS-UAE command namespace; all non-wrapper input passes through unchanged.
+- Offer completion for command names and their parameters.
 - Document every wrapper command in `README.md`.
 
 ### 3.3 Watchpoint logging
 
-The user creates watchpoints with the native debugger (`w`); the wrapper observes hits.
+The user creates watchpoints with the native debugger (`w`); the wrapper observes hits and routes them globally.
 
-When a configured watchpoint causes a break, the wrapper recognizes the event, parses the hit, and appends a record to the configured log file. Parsing and logging must be based on output confirmed for the target FS-UAE version; unparsed fields are reported, never fabricated.
+A single `:output` setting chooses the destination for every watchpoint hit: `shell` (screen only, the default), `log` (CSV file only), or `both`. In `log` mode the watchpoint hit block (the `Memwatch ...` line and its following dump, up to the prompt) is hidden on the terminal and written to the CSV file instead, with a per-watchpoint counter shown in a fixed status line so logging stays visible. `shell` and `both` keep the terminal fully transparent.
 
-The wrapper never resumes emulation automatically: a hit leaves the emulator stopped at the debugger prompt, and the user continues with `g`. Debugger output is shown unchanged.
+Parsing and logging must be based on output confirmed for the target FS-UAE version; unparsed fields are reported, never fabricated. The wrapper never resumes emulation automatically: a hit leaves the emulator stopped at the debugger prompt, and the user continues with `g`.
 
 ### 3.4 Log file format
 
 - CSV, UTF-8, append-only. Write a header only when the file is newly created or empty, and flush so recent records survive an interruption.
+- Route every watchpoint into one global log file; the name is chosen with `:logfile`.
+- Keep the chosen name in memory and create the file lazily on the first logged hit. Default names embed a millisecond timestamp so they cannot collide; an existing user-supplied name gets an increasing numeric suffix so earlier logs are never overwritten.
 - Include a timestamp when one can be obtained reliably, plus the watchpoint id.
+- Include the frame counter of FS-UAE's enhanced hit output when present (a decimal value), and leave it empty otherwise, so an unavailable frame is not confused with a genuine zero.
 - Record the address, access type, and value only when the observed output supports them; distinguish unavailable values from genuine zeros.
 - Handle file creation errors, permissions, and invalid paths explicitly.
 - Favour a small, well-defined schema over a generic logging framework.
@@ -108,7 +112,7 @@ Errors must be visible and actionable. Examples: FS-UAE executable not found; th
 
 ## 10. Testing
 
-- Unit-test logic that does not require a running emulator, in particular: debugger output parsing (including partial and multi-line output), wrapper command parsing and dispatch, watchpoint logging configuration management, CSV creation/appending and errors, hit handling, unrelated debugger stops, logging failures, and process termination/cleanup.
+- Unit-test logic that does not require a running emulator, in particular: debugger output parsing (including partial and multi-line output), shell command parsing/dispatch and completion, output routing and log-file naming (including lazy creation and collisions), CSV creation/appending and errors, hit handling, unrelated debugger stops, logging failures, and process termination/cleanup.
 - Use captured FS-UAE output in `tests/fixtures/` as fixtures wherever possible.
 - Prefer deterministic synchronization over arbitrary timing delays.
 - Do not claim that integration tests pass unless they have actually been run.

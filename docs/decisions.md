@@ -22,7 +22,7 @@ Why the _Debug Shell_ is built the way it is.  Each record captures the context,
 
 **Context.** FS-UAE and WinUAE output formats are not guaranteed to match, and guessed formats would silently corrupt logs.
 
-**Decision.** Implement parsing only for formats captured from real FS-UAE 3.2.35 sessions (kept in `tests/fixtures/` and documented in `fs-uae-debugger-output.md`).  Unknown lines are passed through untouched and never turned into fabricated data.
+**Decision.** Implement parsing only for formats captured from real FS-UAE sessions (kept in `tests/fixtures/` and documented in `debug-shell-output.md`).  Unknown lines are passed through untouched and never turned into fabricated data.
 
 **Consequences.** The parser is small and trustworthy, but version-specific; supporting another version means capturing and verifying its output first.
 
@@ -49,3 +49,27 @@ Why the _Debug Shell_ is built the way it is.  Each record captures the context,
 **Decision.** Name the CSV writer module `eventlog.py`.
 
 **Consequences.** Import resolution stays unambiguous and readers are not misled into expecting standard-library logging behaviour.
+
+## ADR-0007: One global output destination for all watchpoints
+
+**Context.** The first design bound each watchpoint id to its own log file, which meant repeatedly configuring logging per watchpoint and having no way to see or hide the combined stream at a glance.
+
+**Decision.** Route every watchpoint hit through a single global `OutputMode`: `shell` (screen only, the default), `log` (file only), or `both`.  The `:output` command selects the mode.  In `log` mode the watchpoint hit output — the `Memwatch ...` line and its following dump block, up to the prompt — is hidden on the terminal and only written to the file.
+
+**Consequences.** Logging is configured once and applies to every watchpoint.  `log` mode deliberately diverges from the transparent default, so it is opt-in and reported through the status line (see ADR-0009); `shell`/`both` keep the terminal fully transparent.
+
+## ADR-0008: Lazy log-file creation and collision-free default names
+
+**Context.** Creating a file when logging is merely *selected* would litter the filesystem and make the chosen name visible on disk before any data exists.  Reusing a name would silently append to an earlier log.
+
+**Decision.** Keep the chosen log-file name in memory and create the file only on the first hit that is actually written.  The default name embeds a millisecond timestamp (`output_<timestamp>.csv`), so defaults never collide.  A user-supplied name that already exists gets an increasing numeric suffix (`report_1.csv`, `report_2.csv`).  `:logfile` discards the current file and counters, so the next logged hit starts a fresh file.
+
+**Consequences.** No empty files are created and earlier logs are never overwritten.  Because creation is deferred, a bad path or permission error surfaces on the first logged hit and is reported there rather than at `:logfile` time.
+
+## ADR-0009: Tab completion and a fixed-position counter line
+
+**Context.** Shell commands have fixed choices and file arguments that are easy to mistype, and `log` mode hides all watchpoint output, leaving no feedback that logging works.
+
+**Decision.** Add a `prompt_toolkit` `Completer` (`WrapperCompleter`) that completes command names and their arguments on lines that start with the shell prefix: fixed choices for `:output`, filesystem paths for `:logfile`.  In `log` mode, render a `bottom_toolbar` status line with the running total and a counter per watchpoint, refreshed by invalidating the prompt when a hit is logged.
+
+**Consequences.** Commands are discoverable and less error-prone, and `log` mode still gives visible per-watchpoint feedback.  Completion only engages after the shell prefix, so native debugger input is untouched.  The counter lives at a fixed screen position rather than scrolling with output.
