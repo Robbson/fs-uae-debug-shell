@@ -142,6 +142,35 @@ class ParserStreamTests(unittest.TestCase):
         self.assertEqual(len(hits), 1)
         self.assertIsNotNone(hits[0])
 
+    def test_feed_pieces_carry_raw_text_and_events(self) -> None:
+        line = "Memwatch 0: break at 00000574.W  W  0000005B PC=0000C28C CPUDW (000)"
+        pieces = DebuggerOutputParser().feed_pieces(line + "\r\n")
+        self.assertEqual(len(pieces), 1)
+        assert pieces[0].event is not None
+        self.assertEqual(pieces[0].event.type, EventType.WATCHPOINT_HIT)
+        self.assertEqual(pieces[0].text, line + "\r\n")
+
+    def test_feed_pieces_prompt_without_newline_is_own_piece(self) -> None:
+        pieces = DebuggerOutputParser().feed_pieces("Next PC: 00008a6e\n>")
+        self.assertEqual(pieces[-1].text, ">")
+        assert pieces[-1].event is not None
+        self.assertEqual(pieces[-1].event.type, EventType.PROMPT)
+
+    def test_feed_pieces_preserve_blank_lines(self) -> None:
+        pieces = DebuggerOutputParser().feed_pieces("a\n\nb\n")
+        self.assertEqual([piece.text for piece in pieces], ["a\n", "\n", "b\n"])
+        self.assertTrue(all(piece.event is None for piece in pieces))
+
+    def test_feed_events_match_feed_pieces(self) -> None:
+        data = (FIXTURES / "watchpoint_session.txt").read_bytes().decode("latin-1")
+        expected = DebuggerOutputParser().feed(data)
+        pieces = DebuggerOutputParser().feed_pieces(data)
+        actual = [piece.event for piece in pieces if piece.event is not None]
+        self.assertEqual(
+            [event.type for event in expected],
+            [event.type for event in actual],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

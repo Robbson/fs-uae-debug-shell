@@ -11,7 +11,7 @@ from pathlib import Path
 from .commands import CommandDispatcher, CommandResult
 from .config import AppConfig
 from .eventlog import EventLogError
-from .parser import DebuggerOutputParser, Event, EventType, WatchpointHit
+from .parser import DebuggerOutputParser, Event, EventType, Piece, WatchpointHit
 from .session import Session, SessionError, SessionState
 from .terminal import Console
 from .watchpoints import WatchpointManager
@@ -29,10 +29,12 @@ class Application:
         self.watchpoints = WatchpointManager()
         self.console = console if console is not None else Console()
         self.auto_resume = config.auto_resume
+        self.show_watchpoint_dump = config.show_watchpoint_dump
         self.state = SessionState.RUNNING
         self._pending_resume = False
         self._at_prompt = False
         self._stopping = False
+        self._suppress_output = False
         self._definitions: dict[int, str] = {}
         self.dispatcher = CommandDispatcher(
             prefix=config.prefix,
@@ -110,8 +112,35 @@ class Application:
             self._stop_from_child()
             return
         text = data.decode("latin-1")
-        self.console.write(text)
-        self._process_events(self.parser.feed(text))
+        self._consume_output(text)
+
+    def _consume_output(self, text: str) -> None:
+        for piece in self.parser.feed_pieces(text):
+            self._handle_piece(piece)
+
+    def _handle_piece(self, piece: Piece) -> None:
+        event = piece.event
+        if event is not None and event.type is EventType.WATCHPOINT_HIT:
+            assert event.hit is not None
+            duplicate = self.watchpoints.is_duplicate(event.hit)
+            if self.show_watchpoint_dump or not duplicate:
+                self._write(piece.text)
+            self._process_events([event])
+            self._suppress_output = (
+                not self.show_watchpoint_dump and self._pending_resume
+            )
+            return
+        if event is not None and event.type is EventType.PROMPT:
+            if not self._suppress_output:
+                self._write(piece.text)
+            self._suppress_output = False
+            self._process_events([event])
+            return
+        if self._suppress_output:
+            return
+        self._write(piece.text)
+        if event is not None:
+            self._process_events([event])
 
     def _stop_from_child(self) -> None:
         self._stopping = True
@@ -138,7 +167,12 @@ class Application:
 
     def _on_hit(self, hit: WatchpointHit) -> None:
         self.state = SessionState.STOPPED
+        watch = self.watchpoints.get_watch(hit.watchpoint)
+        name = watch.name if watch is not None else ""
         config = self.watchpoints.get(hit.watchpoint)
+        duplicate = self.watchpoints.is_duplicate(hit)
+        self.watchpoints.observe(hit)
+
         if config is None:
             self._pending_resume = False
             self._write(
@@ -147,24 +181,28 @@ class Application:
                 f"pc={hit.pc:08X} (not logging; not resuming)\n"
             )
             return
-        try:
-            config.writer.append(hit)
-        except EventLogError as exc:
-            log.error("%s", exc)
-            self._write(
-                f"\n[wrapper] error: failed to log watchpoint {hit.watchpoint}: {exc}\n"
-                "[wrapper] leaving emulator stopped\n"
-            )
-            self._pending_resume = False
-            return
+
+        if not duplicate:
+            try:
+                config.writer.append(hit, name=name)
+            except EventLogError as exc:
+                log.error("%s", exc)
+                self._write(
+                    f"\n[wrapper] error: failed to log watchpoint {hit.watchpoint}: {exc}\n"
+                    "[wrapper] leaving emulator stopped\n"
+                )
+                self._pending_resume = False
+                return
 
         resuming = self.auto_resume
-        suffix = "resuming" if resuming else "auto-resume disabled"
-        self._write(
-            f"\n[wrapper] watchpoint {hit.watchpoint} -> {config.path}: "
-            f"addr={hit.address:08X} size={hit.size} access={hit.access} "
-            f"value={hit.value:08X} pc={hit.pc:08X} ({suffix})\n"
-        )
+        if self.show_watchpoint_dump:
+            suffix = "resuming" if resuming else "auto-resume disabled"
+            note = " (unchanged)" if duplicate else ""
+            self._write(
+                f"\n[wrapper] watchpoint {hit.watchpoint} -> {config.path}: "
+                f"addr={hit.address:08X} size={hit.size} access={hit.access} "
+                f"value={hit.value:08X} pc={hit.pc:08X}{note} ({suffix})\n"
+            )
         self._pending_resume = resuming
 
     def _on_prompt(self) -> None:
@@ -198,15 +236,26 @@ class Application:
             self._write(f"\n[wrapper] {result.output}\n")
             if result.quit:
                 self._stopping = True
+                return
+            if result.forward:
+                self._at_prompt = False
+                self._pending_resume = False
+                self._send_commands(result.forward)
             elif self._at_prompt:
                 self._write(">")
             return
         self._at_prompt = False
         self._pending_resume = False
-        try:
-            self.session.send_bytes(text.encode("utf-8", errors="replace") + b"\n")
-        except SessionError as exc:
-            log.error("forwarding command failed: %s", exc)
+        self._send_commands((text,))
+
+    def _send_commands(self, commands: tuple[str, ...]) -> None:
+        for command in commands:
+            try:
+                self.session.send_bytes(
+                    command.encode("utf-8", errors="replace") + b"\n"
+                )
+            except SessionError as exc:
+                log.error("forwarding command failed: %s", exc)
 
     def _forward_raw(self, data: bytes) -> None:
         self._at_prompt = False
@@ -226,6 +275,7 @@ class Application:
             f"state: {self.state.value}",
             f"fs-uae: {self.config.executable} {' '.join(self.config.fsuae_args)}".rstrip(),
             f"automatic resume: {'on' if self.auto_resume else 'off'}",
+            f"watchpoint dump: {'on' if self.show_watchpoint_dump else 'off'}",
         ]
         configs = self.watchpoints.configs()
         if configs:

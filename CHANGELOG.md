@@ -9,11 +9,16 @@ Add a short entry under `Unreleased` for every completed feature or behavioural 
 ### Added
 
 - `prompt_toolkit` as a runtime dependency.
+- `--show-watchpoint-dump` to print the debugger register dump and the wrapper's per-hit summary for watchpoint hits.
+- `:wwcl <id> <name> <address> <length>[, ...]` to create write-change watchpoints in one command, log them to an auto-named CSV file (`<name1>_<name2>_NNN.csv`), and de-duplicate unchanged values (FS-UAE's own `C` flag does not work).  `:wwcl` with no arguments lists the watches and their last values.
+- A `name` column in the CSV, taken from `:wwcl` watch aliases (empty for `:logwatch` watches).
 
 ### Changed
 
 - Replaced the hand-written line editor with a `prompt_toolkit` `PromptSession`, so the input line now supports cursor movement (Left/Right), Home/End, Backspace/Delete, and command history with the Up/Down arrows.
 - The wrapper input loop now runs on `asyncio` and reads FS-UAE output with `loop.add_reader`; debugger output is rendered above the prompt via `patch_stdout()`, so asynchronous output no longer corrupts the line being typed.
+- Watchpoint hits that are logged and automatically resumed now show only the `Memwatch ... break at ...` line by default; the register dump/disassembly and the wrapper's per-hit summary are suppressed.  Use `--show-watchpoint-dump` for the previous verbose output.
+- CSV timestamps no longer carry a timezone offset, and the `watchpoint` column is now headed `wp`.
 
 ## [0.1.0] - 2026-10-10
 

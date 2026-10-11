@@ -31,7 +31,7 @@ The wrapper launches FS-UAE as a child process on a pseudo-terminal (PTY) and ow
 | `src/fs_uae_debug_wrapper/terminal.py` | Interactive prompt via `prompt_toolkit`: line editing/history, `patch_stdout` output (`Console`). |
 | `src/fs_uae_debug_wrapper/parser.py` | Incremental debugger output parser and event types. |
 | `src/fs_uae_debug_wrapper/commands.py` | Wrapper command parsing and dispatch. |
-| `src/fs_uae_debug_wrapper/watchpoints.py` | Watchpoint id ↔ log file management. |
+| `src/fs_uae_debug_wrapper/watchpoints.py` | Watch definitions, change filters, generated log paths, watchpoint ↔ log file management. |
 | `src/fs_uae_debug_wrapper/eventlog.py` | Append-only CSV event writer. |
 
 `eventlog.py` is named to avoid shadowing the Python standard-library `logging` module (see [`decisions.md`](decisions.md)).
@@ -40,8 +40,8 @@ The wrapper launches FS-UAE as a child process on a pseudo-terminal (PTY) and ow
 
 1. `Session.start` spawns FS-UAE on a PTY with child echo disabled.
 2. `Application._run_async` registers the child PTY fd with `loop.add_reader` and enters `Console.patched_stdout()`.
-3. Child output: the reader callback writes the decoded text to the console and passes it to `DebuggerOutputParser.feed`, which returns a list of `Event`s.
-4. `Application._process_events` reacts to events: it updates debugger definitions, tracks the prompt, handles watchpoint hits, and drives resume.
+3. Child output: the reader callback decodes the text and passes it to `DebuggerOutputParser.feed_pieces`, which returns `Piece`s in order (the exact text plus any structured `Event`).
+4. `Application._handle_piece` decides what to show and routes the event to `_process_events`, which updates debugger definitions, tracks the prompt, handles watchpoint hits, and drives resume.
 5. Input: `Console.prompt_async` returns one edited line.  `Application` dispatches lines starting with the wrapper prefix to `CommandDispatcher`; everything else is written to the child PTY unchanged.
 
 ## State model
@@ -71,7 +71,15 @@ Whether the user has already typed something is delegated to `Console.input_pend
 - watchpoint hit: `Memwatch <id>: break at <addr>.<size>  <access>  <value> PC=<pc> <trailer>`;
 - the prompt: a bare `>` at the start of a line.
 
-The parser is incremental: it buffers partial lines across `feed()` calls and recognises the prompt without a trailing newline.
+The parser is incremental: it buffers partial lines across `feed_pieces()` calls and recognises the prompt without a trailing newline.  `feed()` remains as a convenience that returns only the structured events.
+
+## Output filtering
+
+Output is displayed piece by piece as it arrives, so nothing is rewritten.  When a hit of a configured watchpoint is logged *and* will be automatically resumed, `Application` suppresses the following pieces (the register dump, disassembly, `Next PC`, and the prompt) until the prompt ends the block; the `Memwatch ...` hit line itself is always shown.  `--show-watchpoint-dump` turns this suppression off.  Unconfigured hits, manual activations, and `:auto off` are shown in full.  The per-hit wrapper summary line is likewise only printed with `--show-watchpoint-dump`.
+
+## Watch change filter
+
+`:wwcl` creates a watch with a change filter.  `WatchpointManager` keeps the last value seen for each filtered watch; a hit whose value equals the stored value is a *duplicate*: it is not written to the CSV and its line is not displayed, but emulation is still resumed.  Only watches created by `:wwcl` are filtered; plain `:logwatch` watches log every hit.  `CommandDispatcher` translates a `:wwcl` request into native `w <id> $<addr> <len> W` commands (returned as `CommandResult.forward`, which `Application` sends to the session) and enables logging to a generated `<name1>_<name2>_NNN.csv` file.
 
 ## Resume decision
 

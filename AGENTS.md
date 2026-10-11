@@ -40,9 +40,11 @@ These hold for the whole life of the project and must not be tied to a particula
 
 ### 3.3 Watchpoint logging
 
-The user creates watchpoints with the native debugger (`w`); the wrapper only observes them.
+The user creates watchpoints with the native debugger (`w`), or with the wrapper's `:wwcl` shortcut, which also enables logging and names the watches; the wrapper observes hits either way.
 
-When a configured watchpoint causes a break, the wrapper recognizes the event, parses the hit, appends a record to the configured log file, and — if enabled — resumes emulation.  Parsing and logging must be based on output confirmed for the target FS-UAE version; unparsed fields are reported, never fabricated.
+When a configured watchpoint causes a break, the wrapper recognizes the event, parses the hit, appends a record to the configured log file, and — if enabled — resumes emulation.  Parsing and logging must be based on output confirmed for the target FS-UAE version; unparsed fields are reported, never fabricated.  Watches created with `:wwcl` additionally drop hits whose value is unchanged, comparing against the last value kept in memory (FS-UAE's own must-change flag is unreliable), and log to a CSV named after the watches.
+
+By default the wrapper shows only the `Memwatch ...` line for hits it logs and automatically resumes, so continuous logging does not flood the terminal; `--show-watchpoint-dump` restores the debugger's register dump and the per-hit summary.  This reduction is documented and configurable, never silent, and the raw hit line is always shown.
 
 ### 3.4 Safe automatic resume
 
@@ -113,7 +115,7 @@ Errors must be visible and actionable.  Examples: FS-UAE executable not found; t
 
 ## 10. Testing
 
-- Unit-test logic that does not require a running emulator, in particular: debugger output parsing (including partial and multi-line output), wrapper command parsing and dispatch, watchpoint configuration management, CSV creation/appending and errors, automatic-resume decisions, unrelated debugger stops, logging failures, and process termination/cleanup.
+- Unit-test logic that does not require a running emulator, in particular: debugger output parsing (including partial and multi-line output), wrapper command parsing and dispatch, watchpoint configuration management, change filtering, generated log paths, CSV creation/appending and errors, automatic-resume decisions, unrelated debugger stops, logging failures, and process termination/cleanup.
 - Use captured FS-UAE output in `tests/fixtures/` as fixtures wherever possible.
 - Prefer deterministic synchronization over arbitrary timing delays.
 - Do not claim that integration tests pass unless they have actually been run.

@@ -59,6 +59,20 @@ class Event:
     definition: WatchpointDefinition | None = None
 
 
+@dataclass(frozen=True)
+class Piece:
+    """A unit of console output: its exact text plus any structured event.
+
+    ``text`` is the raw text to display (including its line ending, when
+    present) so that callers can forward output unchanged.  ``event`` is the
+    structured event the line produced, if any.  A prompt is emitted as a
+    ``">"`` piece followed by a piece for the remainder of that line.
+    """
+
+    text: str
+    event: Event | None = None
+
+
 # Confirmed format from a real session:
 #   Memwatch 0: break at 00000574.W  W  0000005B PC=0000C28C CPUDW (000)
 _HIT_RE = re.compile(
@@ -135,28 +149,42 @@ class DebuggerOutputParser:
     def feed(self, text: str) -> list[Event]:
         """Consume *text* (may be partial) and return any complete events."""
 
+        return [
+            piece.event for piece in self.feed_pieces(text) if piece.event is not None
+        ]
+
+    def feed_pieces(self, text: str) -> list[Piece]:
+        """Consume *text* and return raw output pieces in order.
+
+        Each piece carries the exact text to display (including its line
+        ending, where present) together with any structured event the line
+        produced.  The same parse therefore drives both automation and what is
+        shown to the user.
+        """
+
         self._buffer += text
-        events: list[Event] = []
+        pieces: list[Piece] = []
         while self._buffer:
             newline = self._buffer.find("\n")
             if newline == -1:
                 if self._buffer.startswith(">"):
-                    events.append(Event(EventType.PROMPT, line=">"))
+                    pieces.append(Piece(">", Event(EventType.PROMPT, line=">")))
                     self._buffer = self._buffer[1:]
                     continue
                 break
-            line = self._buffer[:newline]
+            raw = self._buffer[: newline + 1]
+            line = self._buffer[:newline].rstrip("\r")
             self._buffer = self._buffer[newline + 1 :]
-            line = line.rstrip("\r")
             if line.startswith(">"):
-                events.append(Event(EventType.PROMPT, line=">"))
-                line = line[1:]
-            if not line.strip():
+                pieces.append(Piece(">", Event(EventType.PROMPT, line=">")))
+                remainder = line[1:]
+                if remainder.strip():
+                    pieces.append(Piece(remainder + "\n", parse_line(remainder)))
+                else:
+                    pieces.append(Piece(raw[1:]))
                 continue
-            event = parse_line(line)
-            if event is not None:
-                events.append(event)
-        return events
+            pieces.append(Piece(raw, parse_line(line)))
+        return pieces
 
     @property
     def pending(self) -> str:

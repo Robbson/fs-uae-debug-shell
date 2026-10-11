@@ -77,3 +77,19 @@ Why the FS-UAE Debug Wrapper is built the way it is.  Each record captures the c
 **Decision.** Provide the input line with `prompt_toolkit`'s `PromptSession`, driven by an `asyncio` loop.  The child PTY is read with `loop.add_reader` and its output is rendered above the prompt with `patch_stdout(raw=True)`; `Console` in `terminal.py` wraps this.  `pexpect` keeps ownership of the child PTY.  This supersedes ADR-0003 and the line-editing part of ADR-0004.
 
 **Consequences.** Cursor movement, Home/End, Backspace/Delete, and Up/Down history come from prompt_toolkit's default key bindings; history is in-memory for the session only.  The wrapper now depends on `prompt_toolkit` and uses `asyncio` for its input loop (the demonstrated need required by AGENTS.md).  Only prompt_toolkit reads stdin, so there is no competing read of the terminal.
+
+## ADR-0010: Quiet output for automatically logged watchpoint hits
+
+**Context.** Every watchpoint break makes FS-UAE print a register dump, disassembly, and `Next PC` block before its prompt.  During continuous logging this floods the terminal on every iteration and buries the `Memwatch ...` lines the user actually wants.  The wrapper also printed its own per-hit summary line for the same hit.
+
+**Decision.** By default the wrapper displays only the `Memwatch ... break at ...` line for a hit it logs and will automatically resume, suppresses the generic block and the prompt until the end of that block, and does not print its per-hit summary line.  `--show-watchpoint-dump` restores the register dump and the summary.  Output that is not part of an automatic iteration (unconfigured hits, manual activations, `:auto off`) is always shown in full.
+
+**Consequences.** While logging, the terminal shows a clean stream of watchpoint lines.  This deliberately hides some debugger output, so it is documented and configurable rather than silent: the raw `Memwatch` line is never hidden, the automated parsing/resume logic still sees the full stream, and `--show-watchpoint-dump` trades the clean view back for transparency.
+
+## ADR-0011: `:wwcl` with a wrapper-side change filter
+
+**Context.** FS-UAE's `w` command accepts a watchpoint "must change" (`C`) flag, but it does not work reliably: every write to the watched address breaks, whether or not the value changed.  The user needs a log of real changes only, and the native `w` syntax is verbose to type.
+
+**Decision.** Add `:wwcl <id> <name> <address> <length>[, ...]`.  It expands to native `w <id> $<addr> <len> W` commands, enables CSV logging automatically, and records the watch names.  The log file is generated as `<name1>_<name2>_NNN.csv`, using the next free counter in the working directory.  `WatchpointManager` keeps the last value seen for each watch and drops hits whose value is unchanged: those are neither logged nor displayed, although emulation is still resumed.  The watch `name` is written as a CSV column.
+
+**Consequences.** Users get change-only logs and a compact command.  The filter lives in the wrapper rather than FS-UAE, so it depends on comparing parsed hit values; only `:wwcl`-created watches are filtered, and plain `:logwatch` watches keep logging every hit.  Generated filenames avoid overwriting earlier sessions but tie output to the working directory and require watch names to be filesystem-safe.

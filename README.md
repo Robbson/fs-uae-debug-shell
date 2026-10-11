@@ -36,10 +36,11 @@ The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.r
 ### Options
 
 ```
---fsuae PATH        FS-UAE executable to launch (default: fs-uae)
---prefix CHAR       wrapper command prefix (default: :)
---no-auto-resume    start with automatic resume disabled
--v, --verbose       debug-level wrapper diagnostics
+--fsuae PATH             FS-UAE executable to launch (default: fs-uae)
+--prefix CHAR            wrapper command prefix (default: :)
+--no-auto-resume         start with automatic resume disabled
+--show-watchpoint-dump   also print the debugger register dump on watchpoint hits
+-v, --verbose            debug-level wrapper diagnostics
 ```
 
 ## Wrapper commands
@@ -47,11 +48,34 @@ The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.r
 | Command | Description |
 | --- | --- |
 | `:help` | Show the command list. |
-| `:status` | Show debugger state, logging watchpoints, and debugger watchpoints. |
+| `:status` | Show state, resume/dump settings, logging watchpoints, and debugger watchpoints. |
 | `:logwatch <id> <file>` | Log hits of watchpoint `<id>` to CSV `<file>`. |
 | `:logoff <id>` | Stop logging watchpoint `<id>`. |
+| `:wwcl <spec>[, ...]` | Create write-change watchpoints and log only changed values (see below). |
+| `:wwcl` | List the write-change watchpoints and their last values. |
 | `:auto on\|off\|toggle` | Enable/disable automatic resume after logging. |
 | `:quit` | Stop the emulator and exit the wrapper. |
+
+## Watch write change watchpoints (`:wwcl`)
+
+`:wwcl` is a shortcut for creating a memory watch and logging only real changes.  Each entry is `<id> <name> <address> <length>`, and several entries can be comma-separated:
+
+```text
+:wwcl #1 ball.x 574 2, #2 ball.y 576 2
+```
+
+It sends one native `w` command per entry and enables logging automatically:
+
+- `<id>` may be written as `1` or `#1`; the `#` is dropped before the `w` command.
+- `<address>` is interpreted as hexadecimal (`574`, `$574` and `0x574` are all accepted).
+- `<length>` is the watch length in bytes, as in the debugger's `w` command.
+- `<name>` is a wrapper-only alias (letters, digits, `.`, `_`, `-`); it becomes the `name` column in the CSV.
+
+The log file is named after the watches and a counter, e.g. `ball.x_ball.y_000.csv`, in the wrapper's working directory.  Each `:wwcl` call picks the next free number, so a new session starts a new file.  For example the call above logs to `ball.x_ball.y_000.csv` (then `_001.csv`, ...).
+
+Values are de-duplicated per watch: a hit whose value equals the last recorded value of that watch is **not** logged and its `Memwatch ...` line is not printed, so the log and the terminal show only changes.  Emulation is still resumed for those hits.  As with `:logwatch`, a separate `g` is needed to start emulation; automatic resume then continues.
+
+`:wwcl` with no arguments lists the watchpoints, their names, addresses, lengths, and last values.
 
 ## Watchpoint logging workflow
 
@@ -72,6 +96,8 @@ From then on, every hit of watchpoint 0 is appended to `score.csv` and, with aut
 Memwatch 0: break at 00000574.W  W  000000FB PC=0000B8A6 CPUDW (000)
 ```
 
+By default only the `Memwatch ... break at ...` line is shown for hits that are logged and automatically resumed; the debugger's register dump/disassembly and the wrapper's own per-hit summary are hidden so the terminal is not flooded on every iteration.  `--show-watchpoint-dump` also prints the register dump and the wrapper summary.  A hit that is not being logged, a manual debugger activation (F12+D), and `:auto off` always show the full output.
+
 ### Automatic resume safety
 
 - `g` is sent **only** after a hit of an explicitly configured watchpoint is parsed *and* written to its CSV file successfully.
@@ -85,14 +111,15 @@ Memwatch 0: break at 00000574.W  W  000000FB PC=0000B8A6 CPUDW (000)
 CSV, UTF-8, append-only.  A header row is written when the file is created or empty.  Records are flushed immediately.
 
 ```text
-timestamp,watchpoint,address,size,access,value,pc
-2026-10-10T21:14:35.165+02:00,0,0x00000574,W,W,0x00000080,0x0000C28C
+timestamp,wp,name,address,size,access,value,pc
+2026-10-10T21:14:35.165,0,ball.x,0x00000574,W,W,0x00000080,0x0000C28C
 ```
 
 | Column | Meaning |
 | --- | --- |
-| `timestamp` | ISO-8601 local time with offset. |
-| `watchpoint` | Watchpoint id from the `Memwatch <n>:` line. |
+| `timestamp` | ISO-8601 local time, without a timezone offset. |
+| `wp` | Watchpoint id from the `Memwatch <n>:` line. |
+| `name` | Watch alias from `:wwcl`; empty for `:logwatch` watches. |
 | `address` | Watchpoint address (hex). |
 | `size` | Access size as printed by the debugger (`B`/`W`/`L`). |
 | `access` | Access type as printed by the debugger (`R`/`W`/`I`/`F`/`C`). |
@@ -122,18 +149,19 @@ Unit tests (no emulator required):
 uv run python -m unittest discover -s tests
 ```
 
-They cover parsing (including partial/multi-line output), command dispatch, watchpoint management, CSV creation/append/error handling, resume decisions, unrelated stops, logging failures, console input state, and child-output handling.  Parser tests use real captured output in `tests/fixtures/`.
+They cover parsing (including partial/multi-line output), command dispatch, watchpoint management, CSV creation/append/error handling, resume decisions, unrelated stops, logging failures, console input state, child-output handling, watchpoint output filtering, `:wwcl` parsing/validation, and change filtering.  Parser tests use real captured output in `tests/fixtures/`.
 
 The full interactive flow was run end-to-end against a real FS-UAE 3.2.35 session (`--load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae`, watchpoint `$574`): a scripted PTY harness set the watchpoint, ran `:logwatch 0 score.csv`, resumed with `g`, observed consecutive watchpoint hits being logged and automatically resumed, and quit with `:quit`.  Every hit was logged exactly once and the emulator was left stopped on shutdown.  The only manual step was pressing F12+D to activate the debugger, which cannot be automated.
 
 ### Checks
 
-- `uv run python -m unittest discover -s tests` — 63 tests, all passing.
+- `uv run python -m unittest discover -s tests` — 99 tests, all passing.
 - `uvx ruff check .` — clean.
 - No type checker (mypy/pyright) is configured in this project.
 
 ## Known limitations
 
 - Only output formats confirmed against FS-UAE 3.2.35 are parsed.  Other versions or WinUAE may differ.
-- Watchpoints themselves are created with the native `w` command; the wrapper does not create them.
+- `:logwatch` watches are created with the native `w` command; `:wwcl` creates them for you.
+- FS-UAE's watchpoint "must change" (`C`) flag does not work reliably, so `:wwcl` implements the change filter in the wrapper instead.
 - Command history is kept in memory for the current session; it is not persisted across runs.

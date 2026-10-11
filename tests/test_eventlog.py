@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from fs_uae_debug_wrapper.eventlog import HEADER, CsvEventWriter, EventLogError
@@ -35,18 +35,36 @@ class CsvEventWriterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "score.csv"
             writer = CsvEventWriter(path)
-            ts = datetime(2026, 10, 10, 12, 0, 0, tzinfo=UTC)
-            writer.append(make_hit(0x5B), timestamp=ts)
-            writer.append(make_hit(0x5C), timestamp=ts)
+            ts = datetime(2026, 10, 10, 12, 0, 0)
+            writer.append(make_hit(0x5B), name="ball.x", timestamp=ts)
+            writer.append(make_hit(0x5C), name="ball.x", timestamp=ts)
             writer.close()
             lines = path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 3)
             self.assertEqual(lines[0].split(","), HEADER)
             self.assertEqual(
                 lines[1].split(","),
-                ["2026-10-10T12:00:00.000+00:00", "0", "0x00000574", "W", "W", "0x0000005B", "0x0000C28C"],
+                [
+                    "2026-10-10T12:00:00.000",
+                    "0",
+                    "ball.x",
+                    "0x00000574",
+                    "W",
+                    "W",
+                    "0x0000005B",
+                    "0x0000C28C",
+                ],
             )
-            self.assertEqual(lines[2].split(",")[5], "0x0000005C")
+            self.assertEqual(lines[2].split(",")[6], "0x0000005C")
+
+    def test_name_defaults_to_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "score.csv"
+            writer = CsvEventWriter(path)
+            writer.append(make_hit())
+            writer.close()
+            row = path.read_text(encoding="utf-8").splitlines()[1].split(",")
+            self.assertEqual(row[2], "")
 
     def test_reopen_does_not_duplicate_header(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

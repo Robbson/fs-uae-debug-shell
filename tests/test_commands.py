@@ -5,7 +5,21 @@ import unittest
 from pathlib import Path
 
 from fs_uae_debug_wrapper.commands import CommandDispatcher
+from fs_uae_debug_wrapper.parser import WatchpointHit
 from fs_uae_debug_wrapper.watchpoints import WatchpointManager
+
+
+def make_hit(value: int, watchpoint: int = 0) -> WatchpointHit:
+    return WatchpointHit(
+        watchpoint=watchpoint,
+        address=0x574,
+        size="W",
+        access="W",
+        value=value,
+        pc=0xC28C,
+        trailer="CPUDW (000)",
+        raw="Memwatch: break",
+    )
 
 
 def make_dispatcher(case: unittest.TestCase, tmp: str, auto: bool = True):
@@ -136,6 +150,108 @@ class CommandDispatcherTests(unittest.TestCase):
             config = manager.get(0)
             assert config is not None
             self.assertEqual(config.path.name, "my log.csv")
+
+
+class WwclCommandTests(unittest.TestCase):
+    def test_single_watch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, manager, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":wwcl #1 ball.x 574 2")
+            self.assertTrue(result.ok, result.output)
+            self.assertEqual(result.forward, ("w 1 $574 2 W",))
+            watch = manager.get_watch(1)
+            assert watch is not None
+            self.assertEqual(watch.name, "ball.x")
+            self.assertEqual(watch.address, 0x574)
+            self.assertEqual(watch.length, 2)
+            self.assertIsNotNone(manager.get(1))
+            self.assertEqual(Path(tmp, "ball.x_000.csv").exists(), True)
+
+    def test_multiple_watches_share_one_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, manager, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":wwcl #1 ball.x 574 2, #2 ball.y 576 2")
+            self.assertTrue(result.ok, result.output)
+            self.assertEqual(result.forward, ("w 1 $574 2 W", "w 2 $576 2 W"))
+            self.assertTrue(Path(tmp, "ball.x_ball.y_000.csv").exists())
+            assert manager.get(1) is not None and manager.get(2) is not None
+            self.assertEqual(manager.get(1).path, manager.get(2).path)
+
+    def test_hash_prefix_is_optional(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, manager, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":wwcl 1 ball.x 574 2")
+            self.assertTrue(result.ok, result.output)
+            self.assertEqual(result.forward, ("w 1 $574 2 W",))
+            self.assertIsNotNone(manager.get_watch(1))
+
+    def test_dollar_address_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":wwcl #1 ball.x $574 2")
+            self.assertTrue(result.ok, result.output)
+            self.assertEqual(result.forward, ("w 1 $574 2 W",))
+
+    def test_counter_increments_per_call(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _, _ = make_dispatcher(self, tmp)
+            dispatcher.dispatch(":wwcl #1 ball.x 574 2")
+            dispatcher.dispatch(":wwcl #1 ball.x 574 2")
+            self.assertTrue(Path(tmp, "ball.x_000.csv").exists())
+            self.assertTrue(Path(tmp, "ball.x_001.csv").exists())
+
+    def test_list_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":wwcl")
+            self.assertTrue(result.ok)
+            self.assertIn("no watch write change", result.output)
+
+    def test_list_shows_names_and_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, manager, _ = make_dispatcher(self, tmp)
+            dispatcher.dispatch(":wwcl #1 ball.x 574 2")
+            manager.observe(make_hit(0x19, watchpoint=1))
+            result = dispatcher.dispatch(":wwcl")
+            self.assertTrue(result.ok)
+            self.assertIn("#1 ball.x", result.output)
+            self.assertIn("00000019", result.output)
+
+    def test_invalid_arity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":wwcl #1 ball.x 574")
+            self.assertFalse(result.ok)
+
+    def test_invalid_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":wwcl #1 ball/x 574 2")
+            self.assertFalse(result.ok)
+
+    def test_invalid_address(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":wwcl #1 ball.x zzz 2")
+            self.assertFalse(result.ok)
+
+    def test_invalid_length(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":wwcl #1 ball.x 574 0")
+            self.assertFalse(result.ok)
+
+    def test_duplicate_id_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":wwcl #1 a 100 2, #1 b 200 2")
+            self.assertFalse(result.ok)
+
+    def test_help_mentions_wwcl(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":help")
+            self.assertIn("wwcl", result.output)
 
 
 if __name__ == "__main__":
