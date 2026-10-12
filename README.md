@@ -83,9 +83,77 @@ The value is a whole number of milliseconds and is measured from the signal-read
 | `:sci [add\|rm <scenario> ...]` | Activate or remove watchpoint scenarios from `config.yaml` (`*` selects every scenario; no argument lists the active ones). |
 | `:quit` | Stop the emulator and exit the shell. |
 
-## Watchpoint scenarios
+## Output routing
 
-Typing `w <num> <address> <length> <flags>` for every watchpoint is repetitive and the numbers are easy to lose track of. A scenario names its watchpoints in `config.yaml` and lets the wrapper assign the numbers. Defaults keep the file short; an entry can override `length` or `flags`:
+`:output` decides where **all** watchpoint hits go:
+
+| Mode | Behaviour |
+| --- | --- |
+| `shell` | Show watchpoint hits on the terminal (default). |
+| `log` | Hide watchpoint output on the terminal and write it to the CSV file. |
+| `both` | Show watchpoint hits and write them to the CSV file. |
+
+In `log` mode nothing from a watchpoint hit reaches the screen, so the shell keeps a fixed status line at the bottom with the running total of logged events and a counter per watchpoint. Because the hit block is hidden there, the prompt and that status line stay up while the game runs, so the counter is continuously visible and updates on every hit; a hit that is only logged still stops the emulator, exactly as the native debugger does.
+
+`:logfile <file>` sets the CSV file name; the default is `output_<timestamp>.csv` (with milliseconds, so two sessions never collide). The file is created **lazily**, on the first hit that is actually logged: until then the chosen name only exists in memory. If a user-supplied name already exists, an increasing numeric suffix is appended (for example `report_1.csv`, `report_2.csv`) so earlier logs are never overwritten. Changing `:logfile` starts a new file on the next logged hit.
+
+## Frame values (enhanced output)
+
+FS-UAE's enhanced watchpoint-hit output prefixes every hit with a video-frame counter. A frame can contain several writes to the same watchpoint because the game loop runs more often than frames are rendered, but the screen shows only one of those values. `:framevalues` chooses which writes per frame and watchpoint are shown and logged:
+
+| Value | Behaviour |
+| --- | --- |
+| `first` | Keep the first write of each watchpoint in a frame (default). |
+| `last` | Keep the last write of each watchpoint in a frame. |
+| `all` | Keep every write. |
+
+The classic hit output has no frame counter, so `:framevalues` is ignored there and every hit is used. `:status` reports the current setting. For this enhanced stream:
+
+```text
+00000164 Memwatch 01: 00000574.W  W  00000003 PC=0000B8A6 CPUDW (000)
+00000164 Memwatch 02: 00000576.W  W  00000093 PC=0000B8C2 CPUDW (000)
+00000165 Memwatch 02: 00000576.W  W  00000094 PC=0000C28C CPUDW (000)
+00000165 Memwatch 02: 00000576.W  W  00000095 PC=0000C28C CPUDW (000)
+00000165 Memwatch 02: 00000576.W  W  0000008E PC=0000C968 CPUDW (000)
+00000166 Memwatch 02: 00000576.W  W  0000008D PC=0000C28C CPUDW (000)
+00000166 Memwatch 02: 00000576.W  W  00000088 PC=0000C28C CPUDW (000)
+```
+
+`first` keeps `00000003`, `00000093`, `00000094`, and `0000008D`; `last` keeps `00000003`, `00000093`, `0000008E`, and `00000088`; `all` keeps every line.
+
+## Frame aggregation (enhanced output)
+
+FS-UAE's enhanced hit output is a stream of one full `Memwatch` line per write. `:frameagg` (default `on`) offers an alternative, condensed view that keeps only the frame counter, the watchpoint ids, and their values; address, size, access, PC, and trailer are dropped. All the hits of a frame become one row, with one column per watchpoint, so the table grows wider as watchpoints are added:
+
+```text
+00000969 01:00000029 02:00000067
+00000970 01:0000002C 02:00000068
+```
+
+A watchpoint that did not write in a frame keeps its column but leaves it blank, so a stale value can never be mistaken for a fresh one:
+
+```text
+00000969 01:         02:00000067
+```
+
+With active scenarios the columns are named by their aliases instead of `01`/`02` (see [Watchpoint scenarios](#watchpoint-scenarios)):
+
+```text
+00000969 ball.x:00000029 ball.y:00000067
+```
+
+The same view shapes the CSV log (see below): one row per frame with one column per watchpoint (aliases when configured, otherwise `wp<n>`) and an empty cell for a watchpoint that did not write.
+
+Columns are the watchpoints the wrapper knows about — those defined with `w` (the debugger's `Memwatch breakpoint enabled` definition lines) plus any seen in a hit. Define your watchpoints before you start logging; a watchpoint that first appears after the aggregation header has been written is reported as a logging error and needs a new `:logfile`. `:frameagg` applies only to the enhanced output that carries a frame counter; the classic output without one is passed through unchanged. `:framevalues` still chooses which write of each frame and watchpoint is kept before aggregation.
+
+
+## Alternative ways to add watchpoints
+
+Typing `w <num> <address> <length> <flags>` for every watchpoint is repetitive and the numbers are easy to lose track of. Of course, you can also copy multiple watchpoint defintions (each in a separate line) from any text source to the shell. But the _Debug Shell_ has 2 alternative concepts to make this handling easier: _Watchpoint Scenarios_ & _Quick Watchpoints_.
+
+### Watchpoint scenarios
+
+A scenario names its watchpoints in `config.yaml` and lets the wrapper assign the numbers. Defaults keep the file short; an entry can override `length` or `flags`:
 
 ```yaml
 memwatch:
@@ -150,7 +218,7 @@ Once a scenario is active its aliases replace the watchpoint numbers in the wrap
 
 Verbatim debugger lines (shown when `:frameagg off`) are never rewritten and keep the numbers the debugger printed.
 
-## Quick watchpoints by address
+### Quick watchpoints by address
 
 For a fast look at a few addresses you do not need a scenario. Since no shell command starts with a number, a `:` followed by comma-separated addresses adds them directly, applying `memwatch.defaults` from `config.yaml`:
 
@@ -177,70 +245,7 @@ w 2 576 4 W C L
 w 3 580 2 W C L
 ```
 
-Addresses are hexadecimal and may use the debugger's `$` prefix or `0x` form (`:$574, 0x576`); they are stored and displayed without the prefix. Numbering continues from the last used number, so this mixes freely with `:sci`. There is deliberately **no** shorthand to remove them — it is a quick-testing aid. To remove one without restarting, use the debugger's own `w <num>` (list them with `:status`, which shows the debugger watchpoints, or the debugger's `fl`). If `config.yaml` sets no `memwatch.defaults.flags`, or a length is needed and none is set and none was given, the command fails with a message and registers nothing.
-
-## Output routing
-
-`:output` decides where **all** watchpoint hits go:
-
-| Mode | Behaviour |
-| --- | --- |
-| `shell` | Show watchpoint hits on the terminal (default). |
-| `log` | Hide watchpoint output on the terminal and write it to the CSV file. |
-| `both` | Show watchpoint hits and write them to the CSV file. |
-
-In `log` mode nothing from a watchpoint hit reaches the screen, so the shell keeps a fixed status line at the bottom with the running total of logged events and a counter per watchpoint. Because the hit block is hidden there, the prompt and that status line stay up while the game runs, so the counter is continuously visible and updates on every hit; a hit that is only logged still stops the emulator, exactly as the native debugger does.
-
-`:logfile <file>` sets the CSV file name; the default is `output_<timestamp>.csv` (with milliseconds, so two sessions never collide). The file is created **lazily**, on the first hit that is actually logged: until then the chosen name only exists in memory. If a user-supplied name already exists, an increasing numeric suffix is appended (for example `report_1.csv`, `report_2.csv`) so earlier logs are never overwritten. Changing `:logfile` starts a new file on the next logged hit.
-
-## Frame values (enhanced output)
-
-FS-UAE's enhanced watchpoint-hit output prefixes every hit with a video-frame counter. A frame can contain several writes to the same watchpoint because the game loop runs more often than frames are rendered, but the screen shows only one of those values. `:framevalues` chooses which writes per frame and watchpoint are shown and logged:
-
-| Value | Behaviour |
-| --- | --- |
-| `first` | Keep the first write of each watchpoint in a frame (default). |
-| `last` | Keep the last write of each watchpoint in a frame. |
-| `all` | Keep every write. |
-
-The classic hit output has no frame counter, so `:framevalues` is ignored there and every hit is used. `:status` reports the current setting. For this enhanced stream:
-
-```text
-00000164 Memwatch 01: 00000574.W  W  00000003 PC=0000B8A6 CPUDW (000)
-00000164 Memwatch 02: 00000576.W  W  00000093 PC=0000B8C2 CPUDW (000)
-00000165 Memwatch 02: 00000576.W  W  00000094 PC=0000C28C CPUDW (000)
-00000165 Memwatch 02: 00000576.W  W  00000095 PC=0000C28C CPUDW (000)
-00000165 Memwatch 02: 00000576.W  W  0000008E PC=0000C968 CPUDW (000)
-00000166 Memwatch 02: 00000576.W  W  0000008D PC=0000C28C CPUDW (000)
-00000166 Memwatch 02: 00000576.W  W  00000088 PC=0000C28C CPUDW (000)
-```
-
-`first` keeps `00000003`, `00000093`, `00000094`, and `0000008D`; `last` keeps `00000003`, `00000093`, `0000008E`, and `00000088`; `all` keeps every line.
-
-## Frame aggregation (enhanced output)
-
-FS-UAE's enhanced hit output is a stream of one full `Memwatch` line per write. `:frameagg` (default `on`) offers an alternative, condensed view that keeps only the frame counter, the watchpoint ids, and their values; address, size, access, PC, and trailer are dropped. All the hits of a frame become one row, with one column per watchpoint, so the table grows wider as watchpoints are added:
-
-```text
-00000969 01:00000029 02:00000067
-00000970 01:0000002C 02:00000068
-```
-
-A watchpoint that did not write in a frame keeps its column but leaves it blank, so a stale value can never be mistaken for a fresh one:
-
-```text
-00000969 01:         02:00000067
-```
-
-With active scenarios the columns are named by their aliases instead of `01`/`02` (see [Watchpoint scenarios](#watchpoint-scenarios)):
-
-```text
-00000969 ball.x:00000029 ball.y:00000067
-```
-
-The same view shapes the CSV log (see below): one row per frame with one column per watchpoint (aliases when configured, otherwise `wp<n>`) and an empty cell for a watchpoint that did not write.
-
-Columns are the watchpoints the wrapper knows about — those defined with `w` (the debugger's `Memwatch breakpoint enabled` definition lines) plus any seen in a hit. Define your watchpoints before you start logging; a watchpoint that first appears after the aggregation header has been written is reported as a logging error and needs a new `:logfile`. `:frameagg` applies only to the enhanced output that carries a frame counter; the classic output without one is passed through unchanged. `:framevalues` still chooses which write of each frame and watchpoint is kept before aggregation.
+Addresses are hexadecimal and may use the debugger's `$` prefix or `0x` form (`:$574, 0x576`); they are stored and displayed without the prefix. Numbering continues from the last used number, so this mixes freely with `:sci`. There is deliberately **no** shorthand to remove them — it is a quick-testing aid. To remove one without restarting, use the debugger's own `w <num>` (list them with `:status`, which shows the debugger watchpoints, or the debugger's `w`). If `config.yaml` sets no `memwatch.defaults.flags`, or a length is needed and none is set and none was given, the command fails with a message and registers nothing.
 
 ## CPU register dump
 
@@ -257,7 +262,9 @@ Next PC: 0000c29c
 
 `:showdump on|off` (default `on`) chooses whether this block is written to the terminal. With `off` it is removed from the screen, so repeated stops no longer scroll older output away; the `WARNING: Activated debugger` line and the watchpoint `Memwatch ...` line that introduce it are not part of the block and are still shown, and exception output such as a logging failure is never hidden. Only this automatically printed dump is matched: the dump printed by the `r` command has no stub marker and is forwarded unchanged. The setting affects the terminal only — it does not change what is logged, and emulation is still left stopped as usual.
 
-## Watchpoint logging workflow
+## Logging
+
+### Watchpoint logging workflow
 
 Watchpoints are created with the native debugger command `w` (see the debugger's own `help`). The wrapper only *observes* them:
 
@@ -280,7 +287,7 @@ Memwatch 0: break at 00000574.W  W  000000FB PC=0000B8A6 CPUDW (000)
 
 A watchpoint hit stops the emulator at the debugger prompt, exactly as the native debugger does. The wrapper logs the hit and leaves control with you; emulation continues only when you send `g` (or another command) yourself.
 
-## Log file format
+### Log file format
 
 CSV, UTF-8, append-only. A header row is written when the file is created or empty. Records are flushed immediately.
 
@@ -347,7 +354,7 @@ They cover parsing (including partial/multi-line output), per-frame hit selectio
 
 - Only output formats confirmed against FS-UAE 3.3.0 or higher are parsed. Other versions or WinUAE differ.
 - `--startdebug [MS]` needs the forked FS-UAE build and a POSIX host, because it activates the debugger with `SIGUSR1`. It also passes `--stdout` so the signal-ready marker reaches the wrapper's console; the debugger is activated by the wrapper, so no keyboard interaction is needed. The optional delay is measured from that marker, so it cannot fire the signal before the handler is ready.
-- Watchpoints are created with the native `w` command; the wrapper does not create them for you. A scenario, however, does: it builds and sends the `w` commands for its entries.
+- Watchpoints are created with the native `w` command; the wrapper does not create them for you. A scenario or entering quick watchpoints, however, do: they build and send the `w` commands for their entries.
 - The wrapper does not track watchpoints created manually with `w`. A scenario always assigns the next unused number, so activating one after manual `w` commands can overwrite a number you used by hand. Define scenarios and manual watchpoints so their numbers do not collide, or activate scenarios first.
 - A watchpoint added with several flags (`w 1 574 2 W C L`) prints a definition line whose exact shape is not yet captured, and the parser only knows the single-flag definition form. Such definitions may be absent from `:status`; frame-aggregation columns are still learned from the hits themselves.
 - Scenario configuration is validated at startup; an invalid `config.yaml` (or one passed with `--config`) aborts the wrapper with a located message.
