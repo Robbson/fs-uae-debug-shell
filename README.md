@@ -1,5 +1,7 @@
 # Debug Shell for FS-UAE
 
+![Boing demo together with Debug Shell](docs/demo.gif)
+
 An interactive Python wrapper around the **FS-UAE console debugger** on Linux. Only the forked [FS-UAE version 3.3.0](https://github.com/Robbson/fs-uae) and above is supported because it has mandatory fixes to make the wrapper work. It keeps the native debugger fully usable while adding automation for memory watchpoints: parsing debugger output and logging watchpoint hits to a CSV file.
 
 The wrapper is an automation layer built on top of the existing debugger. It does not reimplement or reinterpret native debugger commands.
@@ -12,21 +14,31 @@ The wrapper is an automation layer built on top of the existing debugger. It doe
 
 ## Install
 
+Clone this repository:
+```sh
+git clone https://github.com/Robbson/fs-uae-debug-shell.git
+cd fs-uae-debug-shell
+```
+
+Install all Python dependencies:
 ```sh
 uv sync
 ```
 
-## Usage
+Make the tool globally available on your system:
+```sh
+uv tool install --editable .
+```
 
-//TODO: Change the sample here as well, including the save sate
+## Usage
 
 Launch FS-UAE through the wrapper, passing the FS-UAE arguments after `--`:
 
 ```sh
-uv run main.py -- --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae
+debug-shell -- ./demo/Boing.fs-uae
 ```
 
-FS-UAE starts the emulator normally. The debugger is **not** active at startup, so the wrapper cannot interact until you activate it:
+FS-UAE starts the emulator normally. The debugger is by default **not** active at startup, so the wrapper cannot interact until you activate it:
 
 1. When the game is running, press **F12 + D** in the FS-UAE window.
 2. FS-UAE prints `WARNING: Activated debugger`, a register dump, and the interactive `>` prompt; the wrapper raises its own `> ` prompt at that point.
@@ -52,10 +64,10 @@ The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.r
 
 ### Start the debugger at startup
 
-The forked FS-UAE build (3.3.0 and above) can enter its debugger when it receives `SIGUSR1`, so you do not have to press F12+D. `--startdebug` uses this: the wrapper launches FS-UAE with `--console_debugger=1 --debugger_signal=1 --stdout` (any of these you pass yourself is left unchanged) and, once FS-UAE prints its `debugger_signal: sending SIGUSR1 will activate the debugger` marker, sends the signal to the child. The order matters: signalling before FS-UAE installs the handler would kill the process, which is why the wrapper waits for that marker.
+The forked FS-UAE build (3.3.0 and above) can enter its debugger when it receives `SIGUSR1`, so you do not have to press F12+D. `--startdebug` uses this: the wrapper launches FS-UAE with `--console_debugger=1 --debugger_signal=1` (any of these you pass yourself is left unchanged) and, once FS-UAE prints its `debugger_signal: sending SIGUSR1 will activate the debugger` marker, sends the signal to the child. The order matters: signalling before FS-UAE installs the handler would kill the process, which is why the wrapper waits for that marker.
 
 ```sh
-uv run main.py --startdebug -- --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae
+debug-shell --startdebug -- ./demo/Boing.fs-uae
 ```
 
 The emulator boots at the loaded point, the debugger activates on the next frame, and the wrapper's `> ` prompt appears as soon as FS-UAE prints its own. Without `--startdebug` the wrapper behaves exactly as before and waits for F12+D. `SIGUSR1` is only available on POSIX hosts and only in the forked build; on anything else FS-UAE rejects the added options or never prints the marker, and you fall back to F12+D.
@@ -63,7 +75,7 @@ The emulator boots at the loaded point, the debugger activates on the next frame
 Pass a delay to let the emulator run first — for example to get past a level that is still loading before you take control:
 
 ```sh
-uv run main.py --startdebug 5000 -- --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae
+debug-shell --startdebug 5000 -- ./demo/Boing.fs-uae
 ```
 
 The value is a whole number of milliseconds and is measured from the signal-ready marker, not from process start, so the safety rule above still holds and a small value is safe. `--startdebug` with no value (or `0`) activates as soon as the marker arrives; the delay is capped by nothing but is cancelled if the emulator exits first.
@@ -353,7 +365,8 @@ They cover parsing (including partial/multi-line output), per-frame hit selectio
 ## Known limitations
 
 - Only output formats confirmed against FS-UAE 3.3.0 or higher are parsed. Other versions or WinUAE differ.
-- `--startdebug [MS]` needs the forked FS-UAE build and a POSIX host, because it activates the debugger with `SIGUSR1`. It also passes `--stdout` so the signal-ready marker reaches the wrapper's console; the debugger is activated by the wrapper, so no keyboard interaction is needed. The optional delay is measured from that marker, so it cannot fire the signal before the handler is ready.
+- `--startdebug [MS]` needs the forked FS-UAE build and a POSIX host, because it activates the debugger with `SIGUSR1`. 
+A signal-ready marker reaches the wrapper's console; the debugger is activated by the wrapper, so no keyboard interaction is needed. The optional delay is measured from that marker, so it cannot fire the signal before the handler is ready.
 - Watchpoints are created with the native `w` command; the wrapper does not create them for you. A scenario or entering quick watchpoints, however, do: they build and send the `w` commands for their entries.
 - The wrapper does not track watchpoints created manually with `w`. A scenario always assigns the next unused number, so activating one after manual `w` commands can overwrite a number you used by hand. Define scenarios and manual watchpoints so their numbers do not collide, or activate scenarios first.
 - A watchpoint added with several flags (`w 1 574 2 W C L`) prints a definition line whose exact shape is not yet captured, and the parser only knows the single-flag definition form. Such definitions may be absent from `:status`; frame-aggregation columns are still learned from the hits themselves.

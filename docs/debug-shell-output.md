@@ -1,6 +1,6 @@
 # Observed FS-UAE 3.2.35 debugger output
 
-All formats below were captured from real FS-UAE 3.2.35 sessions on Linux (`fs-uae --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae`).  The raw captures are committed as test fixtures:
+All formats below were captured from real FS-UAE 3.2.35 sessions on Linux (`fs-uae ./demo/Boing.fs-uae`).  The raw captures are committed as test fixtures:
 
 - `tests/fixtures/watchpoint_session.txt` — one activation followed by eight consecutive watchpoint hits.
 - `tests/fixtures/watchpoint_session_1.txt` — a single watchpoint hit.

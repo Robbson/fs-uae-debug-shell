@@ -1,0 +1,8 @@
+[config]
+amiga_model = A500
+floppy_drive_speed = 0
+console_debugger = 1
+enhanced_memwatch_outputs = 1
+debugger_signal = 1
+load_state = 1
+state_dir = ./demo

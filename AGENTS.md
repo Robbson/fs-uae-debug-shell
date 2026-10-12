@@ -68,12 +68,10 @@ Parsing and logging must be based on output confirmed for the target FS-UAE vers
 
 ## 5. Development and test environment
 
-//TODO: Change it to a sample that is part of the repository using a freeware demo or something, this also includes the supplied memory addresses
-
-- `fs-uae` is available on `PATH`. Start the target game with:
+- `fs-uae` is available on `PATH`. Start the target game using a config like this:
 
 ```
-fs-uae --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae
+fs-uae ./demo/Boing.fs-uae
 ```
 
 Do not scan the filesystem for FS-UAE configurations; use exactly these arguments. The configuration is already prepared for terminal debugging.

@@ -16,26 +16,16 @@
 # Quote addresses: an unquoted `0574` would be read as a YAML integer.
 memwatch:
   defaults:
-    length: 2
+    length: 4
     flags: [W, C, L]
   scenarios:
     ball:
       - name: ball.x
-        address: "574"
+        address: "11BDE"
       - name: ball.y
-        address: "576"
+        address: "11BE2"
       - name: ball.vx
-        address: "580"
+        address: "11BE6"
       - name: ball.vy
-        address: "582"
-    player1:
-      - name: pl1.x
-        address: "5C0"
-        flags: [W, L]          # override the default flags
-      - name: pl1.y
-        address: "5B6"
-      - name: pl1.aim
-        address: "5B8"
-      - name: pl1.fire
-        address: "5BE"
-        length: 1              # override the default length
+        address: "11BEA"
+

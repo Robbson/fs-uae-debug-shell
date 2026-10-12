@@ -13,7 +13,7 @@ from .scenarios import ConfigError, ScenarioCatalog, load_scenarios
 
 USAGE_EPILOG = """\
 example:
-  %(prog)s -- --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae
+  %(prog)s -- --load_state=1 ./demo/Boing.fs-uae
 
 Press F12+D in the FS-UAE window to activate the debugger console, or pass
 --startdebug to activate it at startup on the forked FS-UAE build.  Type
@@ -24,14 +24,11 @@ DEFAULT_CONFIG_NAME = "config.yaml"
 
 # Options the forked FS-UAE build needs to activate its debugger on SIGUSR1.
 # ``console_debugger`` makes the debugger available, ``debugger_signal`` installs
-# the handler, and ``stdout`` routes the log (including the "sending SIGUSR1
-# will activate the debugger" marker) to the console the wrapper reads.
+# the handler that writes a debugger marker to stdout which gets read by the wrapper.
 _START_DEBUG_ARGS = (
     "--console_debugger=1",
-    "--debugger_signal=1",
-    "--stdout",
+    "--debugger_signal=1"
 )
-
 
 def _has_option(args: list[str], name: str) -> bool:
     return any(arg == name or arg.startswith(name + "=") for arg in args)

@@ -78,7 +78,6 @@ class StartDebugTests(unittest.TestCase):
             [
                 "--console_debugger=1",
                 "--debugger_signal=1",
-                "--stdout",
                 "--load_state=2",
                 "game.fs-uae",
             ],
@@ -103,7 +102,6 @@ class StartDebugTests(unittest.TestCase):
                 "--",
                 "--console_debugger=1",
                 "--debugger_signal=1",
-                "--stdout",
                 "game.fs-uae",
             ]
         )
@@ -112,7 +110,6 @@ class StartDebugTests(unittest.TestCase):
             [
                 "--console_debugger=1",
                 "--debugger_signal=1",
-                "--stdout",
                 "game.fs-uae",
             ],
         )
@@ -121,7 +118,7 @@ class StartDebugTests(unittest.TestCase):
         args = cli.ensure_start_debug_args(
             ["--console_debugger", "1", "--debugger_signal=1"]
         )
-        self.assertEqual(args, ["--stdout", "--console_debugger", "1", "--debugger_signal=1"])
+        self.assertEqual(args, ["--console_debugger", "1", "--debugger_signal=1"])
 
 
 class MainTests(unittest.TestCase):
