@@ -10,7 +10,7 @@ from .aggregate import FrameAggregator
 from .dump import RegisterDump
 from .frames import FrameValueMode, FrameValueSelector
 from .output import OutputMode, OutputRouter
-from .scenarios import WatchpointRegistry
+from .scenarios import WatchpointError, WatchpointRegistry, normalize_address
 
 
 class UsageError(Exception):
@@ -39,6 +39,8 @@ shell commands (prefix '{prefix}'):
                                      watchpoint values (default: on)
   {prefix}showdump on|off            show the CPU register dump the debugger
                                      prints when it stops (default: on)
+  {prefix}<addr>[, <addr>[ <len>]]   add watchpoints by address using the
+                                     config.yaml defaults (alias = address)
   {prefix}sci [add|rm <scenario>...] configure watchpoint scenarios from
                                      config.yaml ('*' selects every scenario;
                                      no argument lists the active ones)
@@ -97,6 +99,13 @@ class CommandDispatcher:
                 output=f"error: empty shell command; try '{self.prefix}help'",
                 ok=False,
             )
+        if body[0].isdigit() or body[0] == "$":
+            # No shell command starts with a number, so this is the address
+            # shorthand: ``:<address>[, <address>[ <length>], ...]``.
+            try:
+                return self._cmd_addresses(body)
+            except UsageError as exc:
+                return CommandResult(output=f"error: {exc}", ok=False)
         name, _, rest = body.partition(" ")
         name = name.lower()
         try:
@@ -191,6 +200,51 @@ class CommandDispatcher:
             raise UsageError(usage)
         self.dump.set_enabled(value == "on")
         return CommandResult(output=f"register dump: {value}")
+
+    def _cmd_addresses(self, body: str) -> CommandResult:
+        """Add watchpoints straight from a comma-separated address list."""
+
+        usage = (
+            f"usage: {self.prefix}<address>[, <address>[ <length>], ...] "
+            "(applies memwatch.defaults from config.yaml)"
+        )
+        entries = self._parse_addresses(body, usage)
+        try:
+            assigned = self.scenarios.add_addresses(entries)
+        except WatchpointError as exc:
+            return CommandResult(output=f"error: {exc}", ok=False)
+        commands = tuple(entry.command(number) for number, entry in assigned)
+        summary = ", ".join(f"{number}={entry.name}" for number, entry in assigned)
+        return CommandResult(output=f"added watchpoints: {summary}", commands=commands)
+
+    def _parse_addresses(
+        self, body: str, usage: str
+    ) -> list[tuple[str, int | None]]:
+        entries: list[tuple[str, int | None]] = []
+        for raw in body.split(","):
+            token = raw.strip()
+            if not token:
+                raise UsageError(usage)
+            parts = token.split()
+            if len(parts) > 2:
+                raise UsageError(usage)
+            address = normalize_address(parts[0])
+            if address is None:
+                raise UsageError(
+                    f"'{parts[0]}' is not a hexadecimal address"
+                )
+            length: int | None = None
+            if len(parts) == 2:
+                try:
+                    length = int(parts[1])
+                except ValueError:
+                    raise UsageError(
+                        f"'{parts[1]}' is not a length"
+                    ) from None
+                if length < 1:
+                    raise UsageError("length must be a positive integer")
+            entries.append((address, length))
+        return entries
 
     def _cmd_sci(self, args: list[str]) -> CommandResult:
         usage = f"usage: {self.prefix}sci [add|rm <scenario> ...]"

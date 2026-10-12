@@ -36,6 +36,7 @@ These hold for the whole life of the project and must not be tied to a particula
 - Validate arguments and report useful errors.
 - Keep wrapper commands out of the FS-UAE command namespace; all non-wrapper input passes through unchanged.
 - Offer completion for command names and their parameters.
+- A prefixed line that begins with a number is the quick address shorthand (`:<address>[, <address>[ <length>] ...]`), which adds watchpoints from the configuration defaults without a scenario; it is documented in `README.md`.
 - Document every wrapper command in `README.md`.
 
 ### 3.3 Watchpoint logging

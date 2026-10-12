@@ -448,6 +448,27 @@ class ScenarioAliasTests(unittest.TestCase):
             )
             self.assertFalse(app._prompt_ready.is_set())
 
+    def test_address_shorthand_sends_watchpoint_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp, scenarios=self.catalog())
+            app._handle_line(":574, 576 4, 580")
+            assert isinstance(app.session, FakeSession)
+            self.assertEqual(
+                app.session.sent,
+                [
+                    b"w 1 574 2 W C L\n",
+                    b"w 2 576 4 W C L\n",
+                    b"w 3 580 2 W C L\n",
+                ],
+            )
+            self.assertFalse(app._prompt_ready.is_set())
+
+    def test_address_shorthand_aliases_addresses(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp, scenarios=self.catalog())
+            app._handle_line(":574, 576")
+            self.assertEqual(app.scenarios.aliases(), {1: "574", 2: "576"})
+
 
 class RegisterDumpFilterTests(unittest.TestCase):
     """``:showdump`` hides the CPU register dump the debugger prints on a stop."""

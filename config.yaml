@@ -8,6 +8,11 @@
 # `:sci rm <name>` (or `:sci rm *`) removes it again.  Aliases replace the
 # numbers in the condensed output, the CSV log and the status line.
 #
+# The same `defaults` back the quick address shorthand, which needs no scenario:
+#   :574, 576 4, 580
+# adds those addresses as watchpoints (aliased by the address, with an optional
+# per-address length override).
+#
 # Quote addresses: an unquoted `0574` would be read as a YAML integer.
 memwatch:
   defaults:

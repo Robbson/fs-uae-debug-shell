@@ -79,6 +79,7 @@ The value is a whole number of milliseconds and is measured from the signal-read
 | `:framevalues first\|last\|all` | Keep which write of each frame per watchpoint (default: `first`; ignored for classic output). |
 | `:frameagg on\|off` | Condense each frame into one row of watchpoint values (default: `on`). |
 | `:showdump on\|off` | Show the debugger's CPU register dump on each stop (default: `on`). |
+| `:<address>[, <address>[ <length>] ...]` | Add quick watchpoints by address (aliased by the address) using the `config.yaml` defaults. |
 | `:sci [add\|rm <scenario> ...]` | Activate or remove watchpoint scenarios from `config.yaml` (`*` selects every scenario; no argument lists the active ones). |
 | `:quit` | Stop the emulator and exit the shell. |
 
@@ -148,6 +149,35 @@ Once a scenario is active its aliases replace the watchpoint numbers in the wrap
 ```
 
 Verbatim debugger lines (shown when `:frameagg off`) are never rewritten and keep the numbers the debugger printed.
+
+## Quick watchpoints by address
+
+For a fast look at a few addresses you do not need a scenario. Since no shell command starts with a number, a `:` followed by comma-separated addresses adds them directly, applying `memwatch.defaults` from `config.yaml`:
+
+```text
+:574, 576, 580
+[wrapper] added watchpoints: 1=574, 2=576, 3=580
+```
+
+The wrapper assigns the numbers and sends the same native commands a scenario would:
+
+```text
+w 1 574 2 W C L
+w 2 576 2 W C L
+w 3 580 2 W C L
+```
+
+Each watchpoint is aliased by its bare address (`574`), so it appears as `574` rather than a number in the condensed output, the CSV log and the status line. The length may be overridden per address by writing it after the address; the flags always come from the defaults:
+
+```text
+:574, 576 4, 580
+[wrapper] added watchpoints: 1=574, 2=576, 3=580
+w 1 574 2 W C L
+w 2 576 4 W C L
+w 3 580 2 W C L
+```
+
+Addresses are hexadecimal and may use the debugger's `$` prefix or `0x` form (`:$574, 0x576`); they are stored and displayed without the prefix. Numbering continues from the last used number, so this mixes freely with `:sci`. There is deliberately **no** shorthand to remove them — it is a quick-testing aid. To remove one without restarting, use the debugger's own `w <num>` (list them with `:status`, which shows the debugger watchpoints, or the debugger's `fl`). If `config.yaml` sets no `memwatch.defaults.flags`, or a length is needed and none is set and none was given, the command fails with a message and registers nothing.
 
 ## Output routing
 
@@ -309,7 +339,7 @@ They cover parsing (including partial/multi-line output), per-frame hit selectio
 
 ### Checks
 
-- `uv run python -m unittest discover -s tests` — 261 tests, all passing.
+- `uv run python -m unittest discover -s tests` — 284 tests, all passing.
 - `uvx ruff check .` — clean.
 - No type checker (mypy/pyright) is configured in this project.
 

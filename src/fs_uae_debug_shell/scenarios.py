@@ -34,6 +34,10 @@ class ConfigError(RuntimeError):
     """Raised when the scenario configuration is missing, malformed or invalid."""
 
 
+class WatchpointError(RuntimeError):
+    """Raised when an ad-hoc address watchpoint needs defaults that are not set."""
+
+
 def _fail(source: str, where: str, message: str) -> NoReturn:
     raise ConfigError(f"{source}: {where}: {message}")
 
@@ -64,9 +68,16 @@ class Scenario:
 
 @dataclass(frozen=True)
 class ScenarioCatalog:
-    """The scenarios read from the configuration file, in file order."""
+    """The scenarios read from the configuration file, in file order.
+
+    ``default_length`` and ``default_flags`` are the resolved ``memwatch.defaults``
+    and may be ``None`` when the file does not set them; they are what an ad-hoc
+    address watchpoint falls back to.
+    """
 
     scenarios: Mapping[str, Scenario] = field(default_factory=dict)
+    default_length: int | None = None
+    default_flags: tuple[str, ...] | None = None
 
     @classmethod
     def empty(cls) -> ScenarioCatalog:
@@ -80,6 +91,23 @@ class ScenarioCatalog:
 
     def get(self, name: str) -> Scenario | None:
         return self.scenarios.get(name)
+
+
+def normalize_address(value: str) -> str | None:
+    """Return the bare hexadecimal address for *value*, or ``None`` if invalid.
+
+    Accepts the debugger's ``$`` prefix and the ``0x`` form.  The returned
+    string is the bare hex digits, which is what the ``w`` command takes and
+    what an ad-hoc watchpoint is aliased by.
+    """
+
+    if not isinstance(value, str) or not _ADDRESS_RE.match(value):
+        return None
+    if value.startswith("$"):
+        return value[1:]
+    if value[:2].lower() == "0x":
+        return value[2:]
+    return value
 
 
 class WatchpointRegistry:
@@ -154,6 +182,49 @@ class WatchpointRegistry:
             commands.append(f"w {number}")
         return commands
 
+    def add_addresses(
+        self, addresses: Sequence[tuple[str, int | None]]
+    ) -> list[tuple[int, ScenarioEntry]]:
+        """Register ad-hoc watchpoints by address, returning ``(number, entry)``.
+
+        This backs the ``:<address>[, <address> ...]`` shorthand: the length and
+        flags come from ``memwatch.defaults``, with an optional per-address
+        length override, and each watchpoint is aliased by its bare address.
+        Nothing is registered unless every address resolves, so a missing
+        default or length leaves the registry unchanged.  Raises
+        :class:`WatchpointError` when the defaults cannot supply what is needed.
+        """
+
+        defaults = self._catalog
+        if defaults.default_flags is None:
+            raise WatchpointError(
+                "no default flags; add memwatch.defaults.flags to config.yaml"
+            )
+        resolved: list[ScenarioEntry] = []
+        for address, length in addresses:
+            if length is None:
+                length = defaults.default_length
+            if length is None:
+                raise WatchpointError(
+                    f"no length for {address}; set memwatch.defaults.length "
+                    "or give one after the address"
+                )
+            resolved.append(
+                ScenarioEntry(
+                    name=address,
+                    address=address,
+                    length=length,
+                    flags=defaults.default_flags,
+                )
+            )
+        assigned: list[tuple[int, ScenarioEntry]] = []
+        for entry in resolved:
+            number = self._next
+            self._next += 1
+            self._aliases[number] = entry.name
+            assigned.append((number, entry))
+        return assigned
+
 
 # -- loading and validation -------------------------------------------------
 
@@ -196,7 +267,9 @@ def parse_scenarios(data: Any, source: str = "config") -> ScenarioCatalog:
 
     raw_scenarios = memwatch.get("scenarios")
     if raw_scenarios is None:
-        return ScenarioCatalog.empty()
+        # Defaults alone are still useful: the ``:<address>`` shorthand applies
+        # them without any named scenario.
+        return ScenarioCatalog({}, default_length, default_flags)
     if not isinstance(raw_scenarios, Mapping):
         _fail(source, "memwatch.scenarios", "must be a mapping of scenario names")
 
@@ -222,7 +295,7 @@ def parse_scenarios(data: Any, source: str = "config") -> ScenarioCatalog:
             seen.add(item.name)
             resolved.append(item)
         scenarios[name] = Scenario(name, tuple(resolved))
-    return ScenarioCatalog(scenarios)
+    return ScenarioCatalog(scenarios, default_length, default_flags)
 
 
 def _parse_defaults(

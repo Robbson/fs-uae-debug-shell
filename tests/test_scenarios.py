@@ -7,8 +7,10 @@ from pathlib import Path
 from fs_uae_debug_shell.scenarios import (
     ConfigError,
     ScenarioCatalog,
+    WatchpointError,
     WatchpointRegistry,
     load_scenarios,
+    normalize_address,
     parse_scenarios,
 )
 
@@ -247,6 +249,89 @@ class WatchpointRegistryTests(unittest.TestCase):
         self.assertEqual(registry.names(), [])
         self.assertEqual(registry.aliases(), {})
         self.assertEqual(ScenarioCatalog.empty().names(), [])
+
+
+class DefaultsTests(unittest.TestCase):
+    def test_catalog_keeps_defaults(self) -> None:
+        catalog = load_scenarios(FIXTURES / "config.yaml")
+        self.assertEqual(catalog.default_length, 2)
+        self.assertEqual(catalog.default_flags, ("W", "C", "L"))
+
+    def test_defaults_only_config_is_not_truthy_but_keeps_defaults(self) -> None:
+        catalog = parse_scenarios(
+            {"memwatch": {"defaults": {"length": 2, "flags": ["W"]}}}
+        )
+        self.assertEqual(catalog.names(), [])
+        self.assertFalse(catalog)
+        self.assertEqual(catalog.default_length, 2)
+        self.assertEqual(catalog.default_flags, ("W",))
+
+    def test_normalize_address_accepts_prefixes(self) -> None:
+        self.assertEqual(normalize_address("574"), "574")
+        self.assertEqual(normalize_address("$574"), "574")
+        self.assertEqual(normalize_address("0x574"), "574")
+        self.assertEqual(normalize_address("0X574"), "574")
+        self.assertIsNone(normalize_address("nope"))
+        self.assertIsNone(normalize_address(""))
+
+
+class AddAddressesTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.catalog = load_scenarios(FIXTURES / "config.yaml")
+
+    def test_assigns_numbers_aliases_and_commands(self) -> None:
+        registry = WatchpointRegistry(self.catalog)
+        assigned = registry.add_addresses([("574", None), ("576", None), ("580", None)])
+        self.assertEqual(
+            [entry.command(number) for number, entry in assigned],
+            ["w 1 574 2 W C L", "w 2 576 2 W C L", "w 3 580 2 W C L"],
+        )
+        self.assertEqual(registry.aliases(), {1: "574", 2: "576", 3: "580"})
+
+    def test_length_override(self) -> None:
+        registry = WatchpointRegistry(self.catalog)
+        assigned = registry.add_addresses([("574", None), ("576", 4), ("580", None)])
+        self.assertEqual(
+            [entry.command(number) for number, entry in assigned],
+            ["w 1 574 2 W C L", "w 2 576 4 W C L", "w 3 580 2 W C L"],
+        )
+
+    def test_numbering_continues_after_scenarios(self) -> None:
+        registry = WatchpointRegistry(self.catalog)
+        registry.add("ball")
+        assigned = registry.add_addresses([("590", None)])
+        self.assertEqual(assigned[0][0], 5)
+        self.assertEqual(assigned[0][1].command(5), "w 5 590 2 W C L")
+
+    def test_missing_flags_default_raises(self) -> None:
+        catalog = parse_scenarios({"memwatch": {"defaults": {"length": 2}}})
+        registry = WatchpointRegistry(catalog)
+        with self.assertRaises(WatchpointError):
+            registry.add_addresses([("574", None)])
+
+    def test_missing_length_default_raises_without_override(self) -> None:
+        catalog = parse_scenarios({"memwatch": {"defaults": {"flags": ["W"]}}})
+        registry = WatchpointRegistry(catalog)
+        with self.assertRaises(WatchpointError):
+            registry.add_addresses([("574", None)])
+
+    def test_length_override_covers_missing_default(self) -> None:
+        catalog = parse_scenarios({"memwatch": {"defaults": {"flags": ["W"]}}})
+        registry = WatchpointRegistry(catalog)
+        assigned = registry.add_addresses([("574", 4)])
+        self.assertEqual(assigned[0][1].command(1), "w 1 574 4 W")
+
+    def test_nothing_registered_when_an_address_fails(self) -> None:
+        catalog = parse_scenarios({"memwatch": {"defaults": {"flags": ["W"]}}})
+        registry = WatchpointRegistry(catalog)
+        with self.assertRaises(WatchpointError):
+            registry.add_addresses([("574", 4), ("576", None)])
+        self.assertEqual(registry.aliases(), {})
+
+    def test_expected_file_defaults_raise(self) -> None:
+        registry = WatchpointRegistry()
+        with self.assertRaises(WatchpointError):
+            registry.add_addresses([("574", None)])
 
 
 if __name__ == "__main__":

@@ -58,6 +58,7 @@ class CommandDispatcherTests(unittest.TestCase):
             self.assertIn("framevalues", result.output)
             self.assertIn("frameagg", result.output)
             self.assertIn("showdump", result.output)
+            self.assertIn("<addr>", result.output)
 
     def test_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -369,6 +370,86 @@ class CommandDispatcherTests(unittest.TestCase):
             dispatcher, _ = make_dispatcher(self, tmp)
             result = dispatcher.dispatch(":quit")
             self.assertTrue(result.quit)
+
+
+class AddressShorthandTests(unittest.TestCase):
+    def test_adds_watchpoints_from_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":574, 576, 580")
+            self.assertTrue(result.ok, result.output)
+            self.assertEqual(
+                result.commands,
+                ("w 1 574 2 W C L", "w 2 576 2 W C L", "w 3 580 2 W C L"),
+            )
+            self.assertEqual(
+                dispatcher.scenarios.aliases(),
+                {1: "574", 2: "576", 3: "580"},
+            )
+            self.assertIn("1=574", result.output)
+
+    def test_length_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":574, 576 4, 580")
+            self.assertTrue(result.ok, result.output)
+            self.assertEqual(
+                result.commands,
+                ("w 1 574 2 W C L", "w 2 576 4 W C L", "w 3 580 2 W C L"),
+            )
+
+    def test_without_spaces(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":574,576")
+            self.assertTrue(result.ok, result.output)
+            self.assertEqual(result.commands, ("w 1 574 2 W C L", "w 2 576 2 W C L"))
+
+    def test_address_prefixes_are_normalized(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":$574, 0x576")
+            self.assertTrue(result.ok, result.output)
+            self.assertEqual(result.commands, ("w 1 574 2 W C L", "w 2 576 2 W C L"))
+            self.assertEqual(dispatcher.scenarios.aliases(), {1: "574", 2: "576"})
+
+    def test_invalid_address(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":574, xyz")
+            self.assertFalse(result.ok)
+
+    def test_invalid_length(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":574 nope")
+            self.assertFalse(result.ok)
+
+    def test_zero_length(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":574 0")
+            self.assertFalse(result.ok)
+
+    def test_empty_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":574,")
+            self.assertFalse(result.ok)
+
+    def test_too_many_parts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":574 2 3")
+            self.assertFalse(result.ok)
+
+    def test_without_defaults_is_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":574")
+            self.assertFalse(result.ok)
+            self.assertIn("defaults", result.output)
+            self.assertEqual(dispatcher.scenarios.aliases(), {})
 
 
 if __name__ == "__main__":
