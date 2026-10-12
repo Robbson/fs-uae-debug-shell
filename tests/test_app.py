@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from fs_uae_debug_shell.app import Application
 from fs_uae_debug_shell.config import AppConfig
@@ -535,6 +536,47 @@ class StartDebugTests(unittest.TestCase):
             app._consume_output(self.MARKER)
             assert isinstance(app.session, FakeSession)
             self.assertEqual(app.session.activations, 0)
+
+    def test_delay_schedules_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp, start_debug=True, start_debug_delay_ms=2500)
+            scheduled: dict[str, object] = {}
+
+            class FakeLoop:
+                def call_later(self, delay: float, callback):
+                    scheduled["delay"] = delay
+                    scheduled["callback"] = callback
+                    return mock.Mock()
+
+            with mock.patch(
+                "fs_uae_debug_shell.app.asyncio.get_running_loop",
+                return_value=FakeLoop(),
+            ):
+                app._consume_output(self.MARKER)
+            assert isinstance(app.session, FakeSession)
+            self.assertEqual(app.session.activations, 0)
+            self.assertEqual(scheduled["delay"], 2.5)
+            callback = scheduled["callback"]
+            assert callable(callback)
+            callback()
+            self.assertEqual(app.session.activations, 1)
+
+    def test_delay_timer_cancelled_on_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp, start_debug=True, start_debug_delay_ms=2500)
+            handle = mock.Mock()
+
+            class FakeLoop:
+                def call_later(self, delay: float, callback):
+                    return handle
+
+            with mock.patch(
+                "fs_uae_debug_shell.app.asyncio.get_running_loop",
+                return_value=FakeLoop(),
+            ):
+                app._consume_output(self.MARKER)
+            app._stop_from_child()
+            handle.cancel.assert_called_once()
 
     def test_activation_failure_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

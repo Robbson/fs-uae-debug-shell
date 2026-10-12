@@ -66,11 +66,13 @@ class StartDebugTests(unittest.TestCase):
     def test_default_is_off(self) -> None:
         config = cli.parse_args(["--", "--load_state=2", "game.fs-uae"])
         self.assertFalse(config.start_debug)
+        self.assertEqual(config.start_debug_delay_ms, 0)
         self.assertEqual(config.fsuae_args, ["--load_state=2", "game.fs-uae"])
 
     def test_adds_debugger_options(self) -> None:
         config = cli.parse_args(["--startdebug", "--", "--load_state=2", "game.fs-uae"])
         self.assertTrue(config.start_debug)
+        self.assertEqual(config.start_debug_delay_ms, 0)
         self.assertEqual(
             config.fsuae_args,
             [
@@ -81,6 +83,18 @@ class StartDebugTests(unittest.TestCase):
                 "game.fs-uae",
             ],
         )
+
+    def test_optional_delay_is_parsed(self) -> None:
+        config = cli.parse_args(
+            ["--startdebug", "1500", "--", "--load_state=2", "game.fs-uae"]
+        )
+        self.assertTrue(config.start_debug)
+        self.assertEqual(config.start_debug_delay_ms, 1500)
+        self.assertEqual(config.fsuae_args[0], "--console_debugger=1")
+
+    def test_negative_delay_is_rejected(self) -> None:
+        with self.assertRaises(SystemExit):
+            cli.parse_args(["--startdebug", "-5"])
 
     def test_does_not_duplicate_supplied_options(self) -> None:
         config = cli.parse_args(

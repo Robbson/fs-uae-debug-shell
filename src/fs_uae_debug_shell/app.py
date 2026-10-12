@@ -58,6 +58,7 @@ class Application:
         self._stopping = False
         self._suppress_block = False
         self._debugger_activation_sent = False
+        self._activation_timer: asyncio.TimerHandle | None = None
         self._prompt_ready = asyncio.Event()
         self._definitions: dict[int, str] = {}
         self.dispatcher = CommandDispatcher(
@@ -138,6 +139,7 @@ class Application:
         return self.output.show_counters
 
     def _shutdown(self) -> None:
+        self._cancel_activation_timer()
         self._flush_pending_frames()
         self.output.close()
         self.session.close()
@@ -252,6 +254,7 @@ class Application:
 
     def _stop_from_child(self) -> None:
         self._stopping = True
+        self._cancel_activation_timer()
         self._prompt_ready.set()
         self.console.cancel()
 
@@ -281,17 +284,36 @@ class Application:
 
         Sent once, after FS-UAE prints its signal-ready marker (an earlier
         ``SIGUSR1`` would kill the process).  Without ``--startdebug`` the
-        marker is ignored and activation stays manual (F12+D).
+        marker is ignored and activation stays manual (F12+D).  An optional
+        delay schedules the signal for later, so the emulator can finish what it
+        is doing first.
         """
 
         if not self.config.start_debug or self._debugger_activation_sent:
             return
         self._debugger_activation_sent = True
+        delay_ms = self.config.start_debug_delay_ms
+        if delay_ms <= 0:
+            self._send_debugger_signal()
+            return
+        loop = asyncio.get_running_loop()
+        log.debug("activating the debugger in %d ms", delay_ms)
+        self._activation_timer = loop.call_later(
+            delay_ms / 1000.0, self._send_debugger_signal
+        )
+
+    def _send_debugger_signal(self) -> None:
+        self._activation_timer = None
         try:
             self.session.activate_debugger()
         except SessionError as exc:
             log.error("could not activate the debugger: %s", exc)
             self._write(f"\n[wrapper] error: could not activate the debugger: {exc}\n")
+
+    def _cancel_activation_timer(self) -> None:
+        if self._activation_timer is not None:
+            self._activation_timer.cancel()
+            self._activation_timer = None
 
     def _on_hit(self, hit: WatchpointHit, out: list[str] | None = None) -> None:
         self.state = SessionState.STOPPED
@@ -426,9 +448,16 @@ class Application:
     def _print_startup_banner(self) -> None:
         args = " ".join(self.config.fsuae_args)
         if self.config.start_debug:
-            activation = (
-                "; the debugger will be activated automatically at startup.\n"
-            )
+            delay = self.config.start_debug_delay_ms
+            if delay > 0:
+                activation = (
+                    f"; the debugger will be activated automatically after "
+                    f"{delay} ms.\n"
+                )
+            else:
+                activation = (
+                    "; the debugger will be activated automatically at startup.\n"
+                )
         else:
             activation = (
                 "; activate the debugger with F12+D when the game is running.\n"

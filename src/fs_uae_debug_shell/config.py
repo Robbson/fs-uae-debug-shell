@@ -16,5 +16,6 @@ class AppConfig:
     prefix: str = ":"
     verbose: bool = False
     start_debug: bool = False
+    start_debug_delay_ms: int = 0
     scenarios: ScenarioCatalog = field(default_factory=ScenarioCatalog.empty)
     config_path: str | None = None

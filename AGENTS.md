@@ -76,7 +76,7 @@ fs-uae --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae
 ```
 
 Do not scan the filesystem for FS-UAE configurations; use exactly these arguments. The configuration is already prepared for terminal debugging.
-- The forked build can be activated programmatically: `--startdebug` sends `SIGUSR1` once the signal-ready marker appears. Without it, ask the user to press F12 + D once the game is running, and state clearly when human interaction is required.
+- The forked build can be activated programmatically: `--startdebug [<ms>]` sends `SIGUSR1` once the signal-ready marker appears, optionally after a delay. Without it, ask the user to press F12 + D once the game is running, and state clearly when human interaction is required.
 - Permanently changing variables that are useful for watchpoint testing; ball position (x, y, vx, vy):
 - `$574` (word), `$576` (word), `$580` (word), `$582` (word).
 

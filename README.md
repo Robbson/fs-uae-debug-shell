@@ -45,7 +45,8 @@ The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.r
 --fsuae PATH             FS-UAE executable to launch (default: fs-uae)
 --config PATH            watchpoint scenario file (default: ./config.yaml when present)
 --prefix CHAR            shell command prefix (default: :)
---startdebug             activate the debugger at startup (forked FS-UAE only)
+--startdebug [MS]        activate the debugger at startup, after an optional
+                         delay in milliseconds (forked FS-UAE only)
 -v, --verbose            debug-level wrapper diagnostics
 ```
 
@@ -58,6 +59,14 @@ uv run main.py --startdebug -- --load_state=2 ~/FS-UAE/Configurations/HotShot.fs
 ```
 
 The emulator boots at the loaded point, the debugger activates on the next frame, and the wrapper's `> ` prompt appears as soon as FS-UAE prints its own. Without `--startdebug` the wrapper behaves exactly as before and waits for F12+D. `SIGUSR1` is only available on POSIX hosts and only in the forked build; on anything else FS-UAE rejects the added options or never prints the marker, and you fall back to F12+D.
+
+Pass a delay to let the emulator run first — for example to get past a level that is still loading before you take control:
+
+```sh
+uv run main.py --startdebug 5000 -- --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae
+```
+
+The value is a whole number of milliseconds and is measured from the signal-ready marker, not from process start, so the safety rule above still holds and a small value is safe. `--startdebug` with no value (or `0`) activates as soon as the marker arrives; the delay is capped by nothing but is cancelled if the emulator exits first.
 
 ## Shell commands
 
@@ -300,14 +309,14 @@ They cover parsing (including partial/multi-line output), per-frame hit selectio
 
 ### Checks
 
-- `uv run python -m unittest discover -s tests` — 257 tests, all passing.
+- `uv run python -m unittest discover -s tests` — 261 tests, all passing.
 - `uvx ruff check .` — clean.
 - No type checker (mypy/pyright) is configured in this project.
 
 ## Known limitations
 
 - Only output formats confirmed against FS-UAE 3.3.0 or higher are parsed. Other versions or WinUAE differ.
-- `--startdebug` needs the forked FS-UAE build and a POSIX host, because it activates the debugger with `SIGUSR1`. It also passes `--stdout` so the signal-ready marker reaches the wrapper's console; the debugger is activated by the wrapper, so no keyboard interaction is needed.
+- `--startdebug [MS]` needs the forked FS-UAE build and a POSIX host, because it activates the debugger with `SIGUSR1`. It also passes `--stdout` so the signal-ready marker reaches the wrapper's console; the debugger is activated by the wrapper, so no keyboard interaction is needed. The optional delay is measured from that marker, so it cannot fire the signal before the handler is ready.
 - Watchpoints are created with the native `w` command; the wrapper does not create them for you. A scenario, however, does: it builds and sends the `w` commands for its entries.
 - The wrapper does not track watchpoints created manually with `w`. A scenario always assigns the next unused number, so activating one after manual `w` commands can overwrite a number you used by hand. Define scenarios and manual watchpoints so their numbers do not collide, or activate scenarios first.
 - A watchpoint added with several flags (`w 1 574 2 W C L`) prints a definition line whose exact shape is not yet captured, and the parser only knows the single-flag definition form. Such definitions may be absent from `:status`; frame-aggregation columns are still learned from the hits themselves.

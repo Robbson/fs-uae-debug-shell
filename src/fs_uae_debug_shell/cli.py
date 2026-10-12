@@ -53,6 +53,20 @@ def ensure_start_debug_args(args: list[str]) -> list[str]:
     return prefix + list(args)
 
 
+def _milliseconds(value: str) -> int:
+    """Argparse type for a non-negative number of milliseconds."""
+
+    try:
+        milliseconds = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid milliseconds value: '{value}'"
+        ) from None
+    if milliseconds < 0:
+        raise argparse.ArgumentTypeError("must not be negative")
+    return milliseconds
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fs-uae-debug-shell",
@@ -80,9 +94,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--startdebug",
-        action="store_true",
+        nargs="?",
+        const=0,
+        default=None,
+        type=_milliseconds,
+        metavar="MS",
         help="activate the debugger at startup via SIGUSR1 instead of waiting "
-        "for F12+D (requires the forked FS-UAE build)",
+        "for F12+D (requires the forked FS-UAE build); an optional delay in "
+        "milliseconds is applied after FS-UAE is ready",
     )
     parser.add_argument(
         "-v",
@@ -129,7 +148,7 @@ def parse_args(argv: list[str] | None = None, cwd: Path | None = None) -> AppCon
     fsuae_args = list(namespace.fsuae_args)
     if fsuae_args and fsuae_args[0] == "--":
         fsuae_args = fsuae_args[1:]
-    if namespace.startdebug:
+    if namespace.startdebug is not None:
         fsuae_args = ensure_start_debug_args(fsuae_args)
     path = resolve_config_path(namespace.config, (cwd or Path.cwd()))
     scenarios = load_scenarios(path) if path is not None else ScenarioCatalog.empty()
@@ -138,7 +157,8 @@ def parse_args(argv: list[str] | None = None, cwd: Path | None = None) -> AppCon
         fsuae_args=fsuae_args,
         prefix=namespace.prefix,
         verbose=namespace.verbose,
-        start_debug=namespace.startdebug,
+        start_debug=namespace.startdebug is not None,
+        start_debug_delay_ms=namespace.startdebug or 0,
         scenarios=scenarios,
         config_path=str(path) if path is not None else None,
     )

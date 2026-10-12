@@ -51,7 +51,7 @@ The interactive prompt is only raised while the debugger is idle at its own `>` 
 
 ## Startup debugger activation
 
-With `--startdebug`, `cli.parse_args` prefixes the FS-UAE arguments with `--console_debugger=1 --debugger_signal=1 --stdout` (unless the user already supplied them) and sets `AppConfig.start_debug`. The forked FS-UAE build installs a `SIGUSR1` handler and prints `debugger_signal: sending SIGUSR1 will activate the debugger`; the parser recognises that marker as a `DEBUGGER_SIGNAL_READY` event, and `Application._activate_debugger` sends `SIGUSR1` exactly once through `Session.activate_debugger`. The marker gates the signal because an earlier `SIGUSR1` would use the default action and kill the process. Without the flag the marker is ignored and activation stays manual (F12+D), preserving the transparent default.
+With `--startdebug`, `cli.parse_args` prefixes the FS-UAE arguments with `--console_debugger=1 --debugger_signal=1 --stdout` (unless the user already supplied them) and sets `AppConfig.start_debug` with an optional `start_debug_delay_ms`. The forked FS-UAE build installs a `SIGUSR1` handler and prints `debugger_signal: sending SIGUSR1 will activate the debugger`; the parser recognises that marker as a `DEBUGGER_SIGNAL_READY` event, and `Application._activate_debugger` sends `SIGUSR1` exactly once through `Session.activate_debugger`. The marker gates the signal because an earlier `SIGUSR1` would use the default action and kill the process, so a non-zero delay is scheduled from the marker with `loop.call_later` (cancelled at shutdown or on child exit) rather than from process start. Without the flag the marker is ignored and activation stays manual (F12+D), preserving the transparent default.
 
 ## State model
 
