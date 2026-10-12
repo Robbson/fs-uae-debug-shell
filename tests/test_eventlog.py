@@ -164,5 +164,38 @@ class AggregatedCsvEventWriterTests(unittest.TestCase):
             aggregated.close()
 
 
+class LabeledCsvEventWriterTests(unittest.TestCase):
+    def test_aggregated_header_uses_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "frames.csv"
+            writer = CsvEventWriter(
+                path, columns=[1, 2], labels={1: "ball.x", 2: "ball.y"}
+            )
+            writer.close()
+            self.assertEqual(
+                path.read_text(encoding="utf-8").splitlines()[0],
+                "timestamp,frame,ball.x,ball.y",
+            )
+
+    def test_aggregated_header_falls_back_to_wp_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "frames.csv"
+            writer = CsvEventWriter(path, columns=[1, 2], labels={1: "ball.x"})
+            writer.close()
+            self.assertEqual(
+                path.read_text(encoding="utf-8").splitlines()[0],
+                "timestamp,frame,ball.x,wp2",
+            )
+
+    def test_per_hit_wp_column_uses_label(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "score.csv"
+            writer = CsvEventWriter(path, labels={0: "ball.x"})
+            writer.append(make_hit(), timestamp=datetime(2026, 10, 10, 12, 0, 0))
+            writer.close()
+            row = path.read_text(encoding="utf-8").splitlines()[1].split(",")
+            self.assertEqual(row[2], "ball.x")
+
+
 if __name__ == "__main__":
     unittest.main()

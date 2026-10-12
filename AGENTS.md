@@ -60,7 +60,7 @@ Parsing and logging must be based on output confirmed for the target FS-UAE vers
 ## 4. Tooling and environment
 
 - Python, managed with `uv`. Preserve the existing `pyproject.toml` and `uv.lock`; use `uv` for dependency management and for running the code. Do not switch package managers.
-- Add dependencies only when clearly justified and explained; keep the set minimal. `pexpect` and `prompt_toolkit` are the only declared runtime dependencies.
+- Add dependencies only when clearly justified and explained; keep the set minimal. `pexpect`, `prompt_toolkit` and `pyyaml` are the only declared runtime dependencies.
 - Target Linux and a POSIX terminal; talk to FS-UAE through `pexpect` and a pseudo-terminal.
 - Primary target: the interactive FS-UAE 3.3.0 console debugger on Linux.
 - Use Python's standard `logging` for wrapper diagnostics.

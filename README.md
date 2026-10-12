@@ -1,6 +1,6 @@
 # Debug Shell for FS-UAE
 
-An interactive Python wrapper around the **FS-UAE console debugger** on Linux. Only the forked FS-UAE version 3.3.0 and above is supported because it has mandatory fixes to make the wrapper work. It keeps the native debugger fully usable while adding automation for memory watchpoints: parsing debugger output and logging watchpoint hits to a CSV file.
+An interactive Python wrapper around the **FS-UAE console debugger** on Linux. Only the forked [FS-UAE version 3.3.0](https://github.com/Robbson/fs-uae) and above is supported because it has mandatory fixes to make the wrapper work. It keeps the native debugger fully usable while adding automation for memory watchpoints: parsing debugger output and logging watchpoint hits to a CSV file.
 
 The wrapper is an automation layer built on top of the existing debugger. It does not reimplement or reinterpret native debugger commands.
 
@@ -8,7 +8,7 @@ The wrapper is an automation layer built on top of the existing debugger. It doe
 
 - Linux with a POSIX terminal
 - [uv](https://docs.astral.sh/uv/)
-- FS-UAE >=3.3.0 (`fs-uae` on `PATH`) and a working X display (`DISPLAY`)
+- [FS-UAE >=3.3.0](https://github.com/Robbson/fs-uae) (`fs-uae` on `PATH`) and a working X display (`DISPLAY`)
 
 ## Install
 
@@ -41,6 +41,7 @@ The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.r
 
 ```
 --fsuae PATH             FS-UAE executable to launch (default: fs-uae)
+--config PATH            watchpoint scenario file (default: ./config.yaml when present)
 --prefix CHAR            shell command prefix (default: :)
 -v, --verbose            debug-level wrapper diagnostics
 ```
@@ -55,7 +56,75 @@ The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.r
 | `:logfile <file>` | Set the CSV log file name. |
 | `:framevalues first\|last\|all` | Keep which write of each frame per watchpoint (default: `first`; ignored for classic output). |
 | `:frameagg on\|off` | Condense each frame into one row of watchpoint values (default: `on`). |
+| `:sci [add\|rm <scenario> ...]` | Activate or remove watchpoint scenarios from `config.yaml` (`*` selects every scenario; no argument lists the active ones). |
 | `:quit` | Stop the emulator and exit the shell. |
+
+## Watchpoint scenarios
+
+Typing `w <num> <address> <length> <flags>` for every watchpoint is repetitive and the numbers are easy to lose track of. A scenario names its watchpoints in `config.yaml` and lets the wrapper assign the numbers. Defaults keep the file short; an entry can override `length` or `flags`:
+
+```yaml
+memwatch:
+  defaults:
+    length: 2
+    flags: [W, C, L]
+  scenarios:
+    ball:
+      - name: ball.x
+        address: "574"
+      - name: ball.y
+        address: "576"
+      - name: ball.vx
+        address: "580"
+      - name: ball.vy
+        address: "582"
+    player1:
+      - name: pl1.x
+        address: "5C0"
+        flags: [W, L]        # override the default flags
+      - name: pl1.y
+        address: "5B6"
+      - name: pl1.aim
+        address: "5B8"
+      - name: pl1.fire
+        address: "5BE"
+        length: 1            # override the default length
+```
+
+The file is read from the folder you launch the wrapper in, or from the path given with `--config`. It is validated on startup; a malformed file or an unknown key aborts the wrapper with a message that names the location, for example:
+
+```text
+[wrapper] error: config.yaml: memwatch.scenarios.ball[1]: 'address' must be a hexadecimal string (quote it, e.g. "574")
+```
+
+A [`config.schema.json`](config.schema.json) is included for editor validation. Quote addresses, since YAML would otherwise read an unquoted `574` as a number.
+
+Activate scenarios at the debugger prompt:
+
+```text
+:sci add ball
+[wrapper] added scenarios:
+  ball: 1=ball.x, 2=ball.y, 3=ball.vx, 4=ball.vy
+```
+
+The wrapper builds the native commands for you (the examples use the defaults above):
+
+```text
+w 1 574 2 W C L
+w 2 576 2 W C L
+w 3 580 2 W C L
+w 4 582 2 W C L
+```
+
+`:sci add *` activates every scenario, `:sci add player1` keeps counting (`5`…`8`), `:sci rm <scenario>`/`:sci rm *` removes them (each watchpoint is removed with `w <num>`), and `:sci` with no argument lists the active scenarios and their assigned numbers. Numbers are never reused within a session.
+
+Once a scenario is active its aliases replace the watchpoint numbers in the wrapper's **own** output — the condensed frame row, the CSV log, the status line and `:status`:
+
+```text
+00000969 ball.x:00000029 ball.y:00000067
+```
+
+Verbatim debugger lines (shown when `:frameagg off`) are never rewritten and keep the numbers the debugger printed.
 
 ## Output routing
 
@@ -110,7 +179,13 @@ A watchpoint that did not write in a frame keeps its column but leaves it blank,
 00000969 01:         02:00000067
 ```
 
-The same view shapes the CSV log (see below): one row per frame with one `wp<n>` column per watchpoint and an empty cell for a watchpoint that did not write.
+With active scenarios the columns are named by their aliases instead of `01`/`02` (see [Watchpoint scenarios](#watchpoint-scenarios)):
+
+```text
+00000969 ball.x:00000029 ball.y:00000067
+```
+
+The same view shapes the CSV log (see below): one row per frame with one column per watchpoint (aliases when configured, otherwise `wp<n>`) and an empty cell for a watchpoint that did not write.
 
 Columns are the watchpoints the wrapper knows about — those defined with `w` (the debugger's `Memwatch breakpoint enabled` definition lines) plus any seen in a hit. Define your watchpoints before you start logging; a watchpoint that first appears after the aggregation header has been written is reported as a logging error and needs a new `:logfile`. `:frameagg` applies only to the enhanced output that carries a frame counter; the classic output without one is passed through unchanged. `:framevalues` still chooses which write of each frame and watchpoint is kept before aggregation.
 
@@ -152,14 +227,14 @@ timestamp,frame,wp,address,size,access,value,pc
 | --- | --- |
 | `timestamp` | ISO-8601 local time, without a timezone offset. |
 | `frame` | Frame counter from FS-UAE's enhanced hit output (decimal); empty for the original format. |
-| `wp` | Watchpoint id from the `Memwatch <n>:` line. |
+| `wp` | Watchpoint id from the `Memwatch <n>:` line, or its scenario alias when one is active. |
 | `address` | Watchpoint address (hex). |
 | `size` | Access size as printed by the debugger (`B`/`W`/`L`). |
 | `access` | Access type as printed by the debugger (`R`/`W`/`I`/`F`/`C`). |
 | `value` | Value printed by the debugger (hex). |
 | `pc` | Program counter at the break (hex). |
 
-With `:frameagg on` and enhanced output, the file uses the wide frame-aggregation schema instead: one row per frame and one column per watchpoint. A watchpoint that did not write in a frame gets an empty cell.
+With `:frameagg on` and enhanced output, the file uses the wide frame-aggregation schema instead: one row per frame and one column per watchpoint. A watchpoint that did not write in a frame gets an empty cell. Columns use scenario aliases when one is active (`timestamp,frame,ball.x,ball.y`); otherwise they are `wp<n>`.
 
 ```text
 timestamp,frame,wp1,wp2
@@ -192,18 +267,21 @@ Unit tests (no emulator required):
 uv run python -m unittest discover -s tests
 ```
 
-They cover parsing (including partial/multi-line output), per-frame hit selection and frame aggregation, command dispatch and completion, output routing and log-file naming, CSV creation/append/error handling (both schemas), console input state, and child-output handling. Parser tests use real captured output in `tests/fixtures/`.
+They cover parsing (including partial/multi-line output), per-frame hit selection and frame aggregation, scenario configuration/validation and alias handling, CLI config resolution, command dispatch and completion, output routing and log-file naming, CSV creation/append/error handling (both schemas), console input state, and child-output handling. Parser tests use real captured output in `tests/fixtures/`.
 
 ### Checks
 
-- `uv run python -m unittest discover -s tests` — 154 tests, all passing.
+- `uv run python -m unittest discover -s tests` — 224 tests, all passing.
 - `uvx ruff check .` — clean.
 - No type checker (mypy/pyright) is configured in this project.
 
 ## Known limitations
 
 - Only output formats confirmed against FS-UAE 3.3.0 or higher are parsed. Other versions or WinUAE differ.
-- Watchpoints are created with the native `w` command; the wrapper does not create them for you.
+- Watchpoints are created with the native `w` command; the wrapper does not create them for you. A scenario, however, does: it builds and sends the `w` commands for its entries.
+- The wrapper does not track watchpoints created manually with `w`. A scenario always assigns the next unused number, so activating one after manual `w` commands can overwrite a number you used by hand. Define scenarios and manual watchpoints so their numbers do not collide, or activate scenarios first.
+- A watchpoint added with several flags (`w 1 574 2 W C L`) prints a definition line whose exact shape is not yet captured, and the parser only knows the single-flag definition form. Such definitions may be absent from `:status`; frame-aggregation columns are still learned from the hits themselves.
+- Scenario configuration is validated at startup; an invalid `config.yaml` (or one passed with `--config`) aborts the wrapper with a located message.
 - Frame aggregation needs FS-UAE's enhanced hit output (the leading frame counter); the classic output is passed through unchanged. Its CSV columns are fixed when the file is created, so define watchpoints before logging.
 - In `log` mode watchpoint output is intentionally hidden from the terminal; use `:output both` to see it as well. The prompt stays up while the game runs there so the status line is always visible; FS-UAE does not read console input while running, so typing while it is not halted has no effect.
 - Command history is kept in memory for the current session; it is not persisted across runs.

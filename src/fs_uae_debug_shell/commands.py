@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from .aggregate import FrameAggregator
 from .frames import FrameValueMode, FrameValueSelector
 from .output import OutputMode, OutputRouter
+from .scenarios import WatchpointRegistry
 
 
 class UsageError(Exception):
@@ -22,6 +23,7 @@ class CommandResult:
     output: str = ""
     ok: bool = True
     quit: bool = False
+    commands: tuple[str, ...] = ()
 
 
 HELP_TEXT = """\
@@ -34,14 +36,27 @@ shell commands (prefix '{prefix}'):
                                      (default: first; ignored without a frame counter)
   {prefix}frameagg on|off            condense each frame into one row of
                                      watchpoint values (default: on)
+  {prefix}sci [add|rm <scenario>...] configure watchpoint scenarios from
+                                     config.yaml ('*' selects every scenario;
+                                     no argument lists the active ones)
   {prefix}quit                       stop the emulator and exit the shell
 All other input is forwarded to the FS-UAE debugger unchanged."""
 
-COMMANDS = ("help", "status", "output", "logfile", "framevalues", "frameagg", "quit")
+COMMANDS = (
+    "help",
+    "status",
+    "output",
+    "logfile",
+    "framevalues",
+    "frameagg",
+    "sci",
+    "quit",
+)
 ARGUMENT_CHOICES: dict[str, tuple[str, ...]] = {
     "output": ("shell", "log", "both"),
     "framevalues": ("first", "last", "all"),
     "frameagg": ("on", "off"),
+    "sci": ("add", "rm"),
 }
 
 
@@ -55,12 +70,14 @@ class CommandDispatcher:
         output: OutputRouter,
         frames: FrameValueSelector,
         aggregate: FrameAggregator,
+        scenarios: WatchpointRegistry,
         status_provider: Callable[[], str],
     ) -> None:
         self.prefix = prefix
         self.output = output
         self.frames = frames
         self.aggregate = aggregate
+        self.scenarios = scenarios
         self._status_provider = status_provider
 
     def handles(self, line: str) -> bool:
@@ -153,6 +170,94 @@ class CommandDispatcher:
             raise UsageError(usage)
         self.aggregate.set_enabled(value == "on")
         return CommandResult(output=f"frame aggregation: {value}")
+
+    def _cmd_sci(self, args: list[str]) -> CommandResult:
+        usage = f"usage: {self.prefix}sci [add|rm <scenario> ...]"
+        if not args:
+            return CommandResult(output=self._sci_listing())
+        sub = args[0].lower()
+        if sub not in ("add", "rm") or len(args) < 2:
+            raise UsageError(usage)
+        if not self.scenarios.configured:
+            raise UsageError(
+                "no scenarios configured; create a config.yaml next to the shell "
+                "or pass --config"
+            )
+        targets = self._sci_targets(args[1:], remove=sub == "rm")
+        if sub == "add":
+            return self._sci_add(targets)
+        return self._sci_remove(targets)
+
+    def _sci_targets(self, names: list[str], *, remove: bool) -> list[str]:
+        if names == ["*"]:
+            return self.scenarios.active_names() if remove else self.scenarios.names()
+        if "*" in names:
+            raise UsageError("'*' must be used on its own")
+        return names
+
+    def _sci_unknown(self, names: list[str]) -> None:
+        unknown = [name for name in names if not self.scenarios.has(name)]
+        if unknown:
+            available = ", ".join(self.scenarios.names()) or "none"
+            raise UsageError(
+                f"unknown scenario(s): {', '.join(unknown)}; configured: {available}"
+            )
+
+    def _sci_add(self, names: list[str]) -> CommandResult:
+        self._sci_unknown(names)
+        commands: list[str] = []
+        added: list[str] = []
+        already: list[str] = []
+        for name in names:
+            if name in self.scenarios.active_names():
+                already.append(name)
+                continue
+            commands.extend(self.scenarios.add(name))
+            added.append(f"{name}: {self._describe_scenario(name)}")
+        lines: list[str] = []
+        if added:
+            lines.append("added scenarios:\n  " + "\n  ".join(added))
+        if already:
+            lines.append("already active: " + ", ".join(already))
+        if not lines:
+            lines.append("no scenarios added")
+        return CommandResult(output="\n".join(lines), commands=tuple(commands))
+
+    def _sci_remove(self, names: list[str]) -> CommandResult:
+        if not names:
+            return CommandResult(output="no active scenarios")
+        self._sci_unknown(names)
+        active = self.scenarios.active_names()
+        present = [name for name in names if name in active]
+        absent = [name for name in names if name not in active]
+        if not present:
+            raise UsageError(
+                "scenario(s) not active: " + ", ".join(absent or names)
+            )
+        commands: list[str] = []
+        for name in present:
+            commands.extend(self.scenarios.remove(name))
+        lines = [f"removed scenarios: {', '.join(present)}"]
+        if absent:
+            lines.append("not active: " + ", ".join(absent))
+        return CommandResult(output="\n".join(lines), commands=tuple(commands))
+
+    def _sci_listing(self) -> str:
+        if not self.scenarios.configured:
+            return "no scenarios configured (create a config.yaml or pass --config)"
+        names = self.scenarios.active_names()
+        if not names:
+            return "no active scenarios"
+        lines = ["active scenarios:"]
+        for name in names:
+            lines.append(f"  {name}: {self._describe_scenario(name)}")
+        return "\n".join(lines)
+
+    def _describe_scenario(self, name: str) -> str:
+        return ", ".join(
+            f"{number}={entry.name}"
+            for number, entry in self.scenarios.assignment(name)
+        )
 
     def _cmd_quit(self, args: list[str]) -> CommandResult:
         if args:

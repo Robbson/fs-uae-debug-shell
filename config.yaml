@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=./config.schema.json
+#
+# Watchpoint scenarios for the Debug Shell.
+#
+# `defaults` are applied to every entry unless the entry overrides `length` or
+# `flags`.  A scenario is activated with `:sci add <name>` (or `:sci add *`),
+# which assigns the watchpoint numbers automatically and remembers the aliases;
+# `:sci rm <name>` (or `:sci rm *`) removes it again.  Aliases replace the
+# numbers in the condensed output, the CSV log and the status line.
+#
+# Quote addresses: an unquoted `0574` would be read as a YAML integer.
+memwatch:
+  defaults:
+    length: 2
+    flags: [W, C, L]
+  scenarios:
+    ball:
+      - name: ball.x
+        address: "574"
+      - name: ball.y
+        address: "576"
+      - name: ball.vx
+        address: "580"
+      - name: ball.vy
+        address: "582"
+    player1:
+      - name: pl1.x
+        address: "5C0"
+        flags: [W, L]          # override the default flags
+      - name: pl1.y
+        address: "5B6"
+      - name: pl1.aim
+        address: "5B8"
+      - name: pl1.fire
+        address: "5BE"
+        length: 1              # override the default length

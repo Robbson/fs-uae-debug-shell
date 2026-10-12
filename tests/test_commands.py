@@ -8,9 +8,16 @@ from fs_uae_debug_shell.aggregate import FrameAggregator
 from fs_uae_debug_shell.commands import CommandDispatcher
 from fs_uae_debug_shell.frames import FrameValueSelector
 from fs_uae_debug_shell.output import OutputMode, OutputRouter
+from fs_uae_debug_shell.scenarios import WatchpointRegistry, load_scenarios
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def make_dispatcher(case: unittest.TestCase, tmp: str) -> tuple[CommandDispatcher, OutputRouter]:
+def make_dispatcher(
+    case: unittest.TestCase,
+    tmp: str,
+    scenarios: WatchpointRegistry | None = None,
+) -> tuple[CommandDispatcher, OutputRouter]:
     router = OutputRouter(Path(tmp))
     case.addCleanup(router.close)
 
@@ -22,9 +29,14 @@ def make_dispatcher(case: unittest.TestCase, tmp: str) -> tuple[CommandDispatche
         output=router,
         frames=FrameValueSelector(),
         aggregate=FrameAggregator(),
+        scenarios=scenarios if scenarios is not None else WatchpointRegistry(),
         status_provider=status,
     )
     return dispatcher, router
+
+
+def ball_registry() -> WatchpointRegistry:
+    return WatchpointRegistry(load_scenarios(FIXTURES / "config.yaml"))
 
 
 class CommandDispatcherTests(unittest.TestCase):
@@ -196,6 +208,124 @@ class CommandDispatcherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             dispatcher, _ = make_dispatcher(self, tmp)
             result = dispatcher.dispatch(":frameagg on off")
+            self.assertFalse(result.ok)
+
+    def test_sci_lists_nothing_without_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":sci")
+            self.assertTrue(result.ok)
+            self.assertEqual(result.output, "no scenarios configured (create a config.yaml or pass --config)")
+
+    def test_sci_add_without_config_is_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":sci add ball")
+            self.assertFalse(result.ok)
+
+    def test_sci_add_assigns_numbers_and_returns_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":sci add ball")
+            self.assertTrue(result.ok, result.output)
+            self.assertEqual(
+                result.commands,
+                (
+                    "w 1 574 2 W C L",
+                    "w 2 576 2 W C L",
+                    "w 3 580 2 W C L",
+                    "w 4 582 2 W C L",
+                ),
+            )
+            self.assertEqual(
+                dispatcher.scenarios.aliases(),
+                {1: "ball.x", 2: "ball.y", 3: "ball.vx", 4: "ball.vy"},
+            )
+            self.assertIn("ball.x", result.output)
+
+    def test_sci_add_second_scenario_continues_numbering(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            dispatcher.dispatch(":sci add ball")
+            result = dispatcher.dispatch(":sci add player1")
+            self.assertTrue(result.ok, result.output)
+            self.assertEqual(
+                result.commands,
+                (
+                    "w 5 5C0 2 W L",
+                    "w 6 5B6 2 W C L",
+                    "w 7 5B8 2 W C L",
+                    "w 8 5BE 1 W C L",
+                ),
+            )
+
+    def test_sci_add_all(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":sci add *")
+            self.assertTrue(result.ok, result.output)
+            self.assertEqual(len(result.commands), 8)
+            self.assertEqual(dispatcher.scenarios.active_names(), ["ball", "player1"])
+
+    def test_sci_list_active(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            dispatcher.dispatch(":sci add ball")
+            result = dispatcher.dispatch(":sci")
+            self.assertTrue(result.ok)
+            self.assertIn("active scenarios:", result.output)
+            self.assertIn("ball: 1=ball.x, 2=ball.y, 3=ball.vx, 4=ball.vy", result.output)
+
+    def test_sci_remove(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            dispatcher.dispatch(":sci add ball")
+            result = dispatcher.dispatch(":sci rm ball")
+            self.assertTrue(result.ok, result.output)
+            self.assertEqual(result.commands, ("w 1", "w 2", "w 3", "w 4"))
+            self.assertEqual(dispatcher.scenarios.aliases(), {})
+            self.assertEqual(dispatcher.scenarios.active_names(), [])
+
+    def test_sci_remove_all(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            dispatcher.dispatch(":sci add *")
+            result = dispatcher.dispatch(":sci rm *")
+            self.assertTrue(result.ok, result.output)
+            self.assertEqual(len(result.commands), 8)
+            self.assertEqual(result.commands[0], "w 1")
+            self.assertEqual(dispatcher.scenarios.active_names(), [])
+
+    def test_sci_remove_all_when_none_active(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":sci rm *")
+            self.assertTrue(result.ok)
+            self.assertEqual(result.output, "no active scenarios")
+
+    def test_sci_unknown_scenario(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":sci add nope")
+            self.assertFalse(result.ok)
+            self.assertIn("unknown scenario", result.output)
+
+    def test_sci_remove_inactive_scenario(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":sci rm ball")
+            self.assertFalse(result.ok)
+
+    def test_sci_requires_subcommand(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":sci add")
+            self.assertFalse(result.ok)
+
+    def test_sci_star_must_be_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp, ball_registry())
+            result = dispatcher.dispatch(":sci add ball *")
             self.assertFalse(result.ok)
 
     def test_quit(self) -> None:

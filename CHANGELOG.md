@@ -8,13 +8,16 @@ Add a short entry under `Unreleased` for every completed feature or behavioural 
 
 ### Added
 
+- Watchpoint scenarios: `config.yaml` (path overridable with `--config`) defines named watchpoints under `memwatch.scenarios`, with shared `memwatch.defaults` for `length` and `flags`; the file is validated at startup and a broken file aborts the wrapper with a located message. A `config.schema.json` is included for editor validation.
+- `:sci add|rm <scenario>...` to activate or remove scenarios (`*` selects every scenario; no argument lists the active ones). Scenarios are numbered automatically from the last used number, and the wrapper generates and sends the native `w` commands for you (add: `w <num> <address> <length> <flags>`; remove: `w <num>`).
+- Watchpoint aliases (the scenario entry names) replace the numbers in the wrapper's own output: the condensed frame row, the CSV log (per-hit `wp` cells and wide per-frame headers), the status line and `:status`. Verbatim debugger lines are never rewritten.
 - `:frameagg on|off` (default `on`) condenses the selected hits of each video frame into one row that keeps only the frame counter, the watchpoint ids, and their values, for both the terminal and the CSV log. The CSV log uses a wide per-frame schema (`timestamp,frame,wp1,wp2,...`) with one column per watchpoint and an empty cell for a watchpoint that did not write in the frame; the classic output without a frame counter ignores the setting.
 - `:framevalues first|last|all` to choose which write of each video frame and watchpoint is shown and logged for FS-UAE's enhanced hit output (which carries a frame counter); the default is `first`, and the classic output without a frame counter ignores the setting.
 - `prompt_toolkit`-based interactive input line with cursor movement (Left/Right), Home/End, Backspace/Delete, and in-memory command history; debugger output is rendered above the prompt with `patch_stdout()`, so asynchronous output cannot corrupt the line being typed.
-- Tab completion for shell command names and their parameters (`:output` choices, `:logfile` paths).
+- Tab completion for shell command names and their parameters (`:output` choices, `:logfile` paths, configured scenario names for `:sci`).
 - `:output shell|log|both` to route all watchpoint hits to the screen, the CSV log, or both (default `shell`). In `log` mode the watchpoint hit block is hidden on the terminal and a fixed-position status line shows a logged-event counter per watchpoint.
 - `:logfile <file>` to choose the CSV log file name. The default is `output_<timestamp>.csv` (milliseconds, so defaults never collide); the file is created lazily on the first logged hit, and an existing user-supplied name gets an increasing numeric suffix.
-- Parser support for both the original watchpoint-hit output and FS-UAE's enhanced output (a leading hex counter and no `break at`).
+- Parser support for both the original watchpoint-hit output and FS-UAE's enhanced output (a leading frame counter and no `break at`).
 - A `frame` column in the CSV log, holding the enhanced hit output's leading frame counter parsed as a decimal integer and left empty for the original format.
 
 ### Changed

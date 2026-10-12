@@ -33,6 +33,15 @@ def complete_full(text: str) -> list[str]:
     ]
 
 
+def complete_scenarios(text: str, names: list[str]) -> list[str]:
+    completer = WrapperCompleter(
+        ":", COMMANDS, ARGUMENT_CHOICES, scenario_names=lambda: list(names)
+    )
+    document = Document(text, len(text))
+    event = CompleteEvent()
+    return [c.text for c in completer.get_completions(document, event)]
+
+
 class WrapperCompleterTests(unittest.TestCase):
     def test_no_completion_without_prefix(self) -> None:
         self.assertEqual(complete("st"), [])
@@ -59,6 +68,22 @@ class WrapperCompleterTests(unittest.TestCase):
 
     def test_no_argument_completion_for_no_argument_command(self) -> None:
         self.assertEqual(complete(":help "), [])
+
+    def test_sci_subcommand_completion(self) -> None:
+        self.assertIn("add", complete(":sci a"))
+        self.assertEqual(complete(":sci r"), ["rm"])
+
+    def test_sci_scenario_completion(self) -> None:
+        self.assertEqual(
+            complete_scenarios(":sci add ", ["ball", "player1"]),
+            ["*", "ball", "player1"],
+        )
+
+    def test_sci_scenario_narrowing(self) -> None:
+        self.assertEqual(complete_scenarios(":sci add ba", ["ball", "player1"]), ["ball"])
+
+    def test_sci_remove_scenario_completion(self) -> None:
+        self.assertEqual(complete_scenarios(":sci rm ", ["ball"]), ["*", "ball"])
 
     def test_logfile_completes_paths(self) -> None:
         import tempfile

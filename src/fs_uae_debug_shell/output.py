@@ -58,10 +58,12 @@ class OutputRouter:
         base_dir: Path,
         now: Callable[[], datetime] | None = None,
         columns: Callable[[], list[int]] | None = None,
+        labels: Callable[[], dict[int, str]] | None = None,
     ) -> None:
         self._base_dir = Path(base_dir)
         self._now = now if now is not None else datetime.now
         self._columns = columns if columns is not None else list
+        self._labels = labels if labels is not None else dict
         self._mode = OutputMode.SHELL
         self._user_name: str | None = None
         self._default_name: str | None = None
@@ -177,7 +179,7 @@ class OutputRouter:
             self._counts.clear()
         path = _unique_path(self._base_path())
         columns = self._columns() if aggregated else None
-        writer = CsvEventWriter(path, columns=columns)
+        writer = CsvEventWriter(path, columns=columns, labels=self._labels())
         self._writer = writer
         self._path = path
         return writer

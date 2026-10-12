@@ -12,6 +12,7 @@ from fs_uae_debug_shell.config import AppConfig
 from fs_uae_debug_shell.frames import FrameValueMode
 from fs_uae_debug_shell.output import OutputMode
 from fs_uae_debug_shell.parser import DebuggerOutputParser, EventType, parse_line
+from fs_uae_debug_shell.scenarios import ScenarioCatalog, load_scenarios
 from fs_uae_debug_shell.session import SessionState
 
 HIT_LINE = "Memwatch 0: break at 00000574.W  W  0000005B PC=0000C28C CPUDW (000)"
@@ -68,11 +69,16 @@ def make_app(
     case: unittest.TestCase,
     tmp: str,
     console: FakeConsole | None = None,
+    scenarios: ScenarioCatalog | None = None,
     **overrides: object,
 ) -> Application:
     if console is None:
         console = FakeConsole()
-    config = AppConfig(fsuae_args=["--load_state=2", "cfg.fs-uae"], **overrides)
+    config = AppConfig(
+        fsuae_args=["--load_state=2", "cfg.fs-uae"],
+        scenarios=scenarios if scenarios is not None else ScenarioCatalog.empty(),
+        **overrides,
+    )
     app = Application(config, console=console)  # type: ignore[arg-type]
     app.session = FakeSession()  # type: ignore[assignment]
     app.output.set_logfile(str(Path(tmp) / "game.csv"))
@@ -358,6 +364,84 @@ class FrameAggregationTests(unittest.TestCase):
             app._flush_pending_frames()
             assert isinstance(app.console, FakeConsole)
             self.assertIn("failed to log frame", app.console.data)
+
+
+class ScenarioAliasTests(unittest.TestCase):
+    """Scenario aliases replace watchpoint numbers in the wrapper's own output."""
+
+    def catalog(self) -> ScenarioCatalog:
+        return load_scenarios(FIXTURES / "config.yaml")
+
+    def test_aliases_in_aggregated_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp, scenarios=self.catalog())
+            app._handle_line(":sci add ball")
+            app._consume_output(ENHANCED_FRAMES)
+            app._flush_pending_frames()
+            assert isinstance(app.console, FakeConsole)
+            self.assertIn("00000164 ball.x:00000003 ball.y:00000093", app.console.data)
+            self.assertIn("00000165 ball.x:         ball.y:00000094", app.console.data)
+
+    def test_aliases_in_aggregated_csv_header(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp, scenarios=self.catalog())
+            app._handle_line(":sci add ball")
+            app.output.set_mode(OutputMode.LOG)
+            app._consume_output(ENHANCED_FRAMES)
+            app._flush_pending_frames()
+            lines = (Path(tmp) / "game.csv").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(lines[0], "timestamp,frame,ball.x,ball.y")
+            self.assertEqual(
+                lines[1].split(",")[1:], ["164", "0x00000003", "0x00000093"]
+            )
+
+    def test_alias_in_per_hit_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp, scenarios=self.catalog())
+            app._handle_line(":sci add ball")
+            app.aggregate.set_enabled(False)
+            app.output.set_mode(OutputMode.LOG)
+            app._consume_output(ENHANCED_HIT_LINE + "\n" + DUMP + ">")
+            row = (Path(tmp) / "game.csv").read_text(encoding="utf-8").splitlines()[1]
+            self.assertEqual(row.split(",")[2], "ball.x")
+
+    def test_toolbar_uses_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp, scenarios=self.catalog())
+            app._handle_line(":sci add ball")
+            app.aggregate.set_enabled(False)
+            app.output.set_mode(OutputMode.LOG)
+            app._consume_output(ENHANCED_HIT_LINE + "\n" + DUMP + ">")
+            self.assertIn("ball.x: 1", app._toolbar_text())
+
+    def test_status_lists_active_scenarios(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp, scenarios=self.catalog())
+            app._handle_line(":sci add ball")
+            self.assertIn("scenarios: ball", app._status_text())
+
+    def test_status_shows_definition_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp, scenarios=self.catalog())
+            app._handle_line(":sci add ball")
+            app._process_events([parse_line(" 1: 00000574 - 00000575 (2)  W  CPU")])
+            self.assertIn("1 (ball.x):", app._status_text())
+
+    def test_sci_add_sends_watchpoint_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp, scenarios=self.catalog())
+            app._handle_line(":sci add ball")
+            assert isinstance(app.session, FakeSession)
+            self.assertEqual(
+                app.session.sent,
+                [
+                    b"w 1 574 2 W C L\n",
+                    b"w 2 576 2 W C L\n",
+                    b"w 3 580 2 W C L\n",
+                    b"w 4 582 2 W C L\n",
+                ],
+            )
+            self.assertFalse(app._prompt_ready.is_set())
 
 
 class InputHandlingTests(unittest.TestCase):

@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from .app import Application
 from .config import AppConfig
+from .scenarios import ConfigError, ScenarioCatalog, load_scenarios
 
 USAGE_EPILOG = """\
 example:
@@ -16,6 +18,8 @@ example:
 Press F12+D in the FS-UAE window to activate the debugger console.  Type
 ':help' at the debugger prompt to list wrapper commands.  FS-UAE command line
 arguments must follow '--' so they are not interpreted by the wrapper."""
+
+DEFAULT_CONFIG_NAME = "config.yaml"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,6 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="fs-uae",
         metavar="PATH",
         help="FS-UAE executable to launch (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        metavar="PATH",
+        help=f"watchpoint scenario file (default: ./{DEFAULT_CONFIG_NAME} when present)",
     )
     parser.add_argument(
         "--prefix",
@@ -60,22 +70,46 @@ def configure_logging(verbose: bool) -> None:
     )
 
 
-def parse_args(argv: list[str] | None = None) -> AppConfig:
+def resolve_config_path(explicit: str | None, cwd: Path) -> Path | None:
+    """Return the config file to load, or ``None`` when there is nothing to load.
+
+    An explicitly requested path must exist; a missing default file simply means
+    the scenario feature stays inert.
+    """
+
+    if explicit is not None:
+        path = Path(explicit).expanduser()
+        if not path.is_file():
+            raise ConfigError(f"scenario config not found: '{path}'")
+        return path
+    candidate = cwd / DEFAULT_CONFIG_NAME
+    return candidate if candidate.is_file() else None
+
+
+def parse_args(argv: list[str] | None = None, cwd: Path | None = None) -> AppConfig:
     parser = build_parser()
     namespace = parser.parse_args(argv)
     fsuae_args = list(namespace.fsuae_args)
     if fsuae_args and fsuae_args[0] == "--":
         fsuae_args = fsuae_args[1:]
+    path = resolve_config_path(namespace.config, (cwd or Path.cwd()))
+    scenarios = load_scenarios(path) if path is not None else ScenarioCatalog.empty()
     return AppConfig(
         executable=namespace.fsuae,
         fsuae_args=fsuae_args,
         prefix=namespace.prefix,
         verbose=namespace.verbose,
+        scenarios=scenarios,
+        config_path=str(path) if path is not None else None,
     )
 
 
 def main(argv: list[str] | None = None) -> int:
-    config = parse_args(argv)
+    try:
+        config = parse_args(argv)
+    except ConfigError as exc:
+        sys.stderr.write(f"[wrapper] error: {exc}\n")
+        return 2
     configure_logging(config.verbose)
     if not config.fsuae_args:
         logging.getLogger("fs_uae_debug_shell").warning(

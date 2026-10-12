@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=../../config.schema.json
+memwatch:
+  defaults:
+    length: 2
+    flags: [W, C, L]
+  scenarios:
+    ball:
+      - name: ball.x
+        address: "574"
+      - name: ball.y
+        address: "576"
+      - name: ball.vx
+        address: "580"
+      - name: ball.vy
+        address: "582"
+    player1:
+      - name: pl1.x
+        address: "5C0"
+        flags: [W, L]
+      - name: pl1.y
+        address: "5B6"
+      - name: pl1.aim
+        address: "5B8"
+      - name: pl1.fire
+        address: "5BE"
+        length: 1

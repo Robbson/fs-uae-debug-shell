@@ -219,5 +219,39 @@ class FrameRecordingTests(unittest.TestCase):
                 router.record_frame(1, {1: 0x1})
 
 
+def make_labeled_router(
+    case: unittest.TestCase,
+    tmp: str,
+    columns: list[int],
+    labels: dict[int, str],
+) -> OutputRouter:
+    router = OutputRouter(
+        Path(tmp),
+        now=lambda: FIXED_NOW,
+        columns=lambda: list(columns),
+        labels=lambda: dict(labels),
+    )
+    case.addCleanup(router.close)
+    return router
+
+
+class LabelTests(unittest.TestCase):
+    def test_per_hit_wp_column_uses_label(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            router = make_labeled_router(self, tmp, [], {0: "ball.x"})
+            router.set_mode(OutputMode.LOG)
+            router.record(make_hit())
+            row = Path(router.display_name()).read_text(encoding="utf-8").splitlines()[1]
+            self.assertEqual(row.split(",")[2], "ball.x")
+
+    def test_aggregated_header_uses_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            router = make_labeled_router(self, tmp, [1, 2], {1: "ball.x", 2: "ball.y"})
+            router.set_mode(OutputMode.LOG)
+            router.record_frame(184, {1: 0x1D, 2: 0x60})
+            lines = Path(router.display_name()).read_text(encoding="utf-8").splitlines()
+            self.assertEqual(lines[0], "timestamp,frame,ball.x,ball.y")
+
+
 if __name__ == "__main__":
     unittest.main()

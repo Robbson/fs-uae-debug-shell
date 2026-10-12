@@ -20,6 +20,7 @@ from .eventlog import EventLogError
 from .frames import FrameValueSelector
 from .output import OutputRouter
 from .parser import DebuggerOutputParser, Event, EventType, Piece, WatchpointHit
+from .scenarios import WatchpointRegistry
 from .session import Session, SessionError, SessionState
 from .terminal import Console, WrapperCompleter
 
@@ -35,13 +36,21 @@ class Application:
         self.parser = DebuggerOutputParser()
         self.frames = FrameValueSelector()
         self.aggregate = FrameAggregator()
+        self.scenarios = WatchpointRegistry(config.scenarios)
         self.output = OutputRouter(
-            base_dir=Path.cwd(), columns=self.aggregate.columns
+            base_dir=Path.cwd(),
+            columns=self.aggregate.columns,
+            labels=self.scenarios.aliases,
         )
         if console is not None:
             self.console = console
         else:
-            completer = WrapperCompleter(config.prefix, COMMANDS, ARGUMENT_CHOICES)
+            completer = WrapperCompleter(
+                config.prefix,
+                COMMANDS,
+                ARGUMENT_CHOICES,
+                scenario_names=self.scenarios.names,
+            )
             self.console = Console(completer=completer)
         self.state = SessionState.RUNNING
         self._stopping = False
@@ -53,6 +62,7 @@ class Application:
             output=self.output,
             frames=self.frames,
             aggregate=self.aggregate,
+            scenarios=self.scenarios,
             status_provider=self._status_text,
         )
 
@@ -212,7 +222,10 @@ class Application:
 
         if self.output.display_enabled:
             line = format_frame_line(
-                aggregated.frame, aggregated.values, self.aggregate.columns()
+                aggregated.frame,
+                aggregated.values,
+                self.aggregate.columns(),
+                self.scenarios.aliases(),
             )
             out.append(line + "\n")
         if self.output.log_enabled:
@@ -294,6 +307,12 @@ class Application:
         if self.dispatcher.handles(text):
             result: CommandResult = self.dispatcher.dispatch(text)
             self._write(f"\n[wrapper] {result.output}\n")
+            if result.commands:
+                # Scenario commands drive the debugger themselves; take the
+                # prompt down until it prints ``>`` again, as for a forwarded
+                # command.
+                self._prompt_ready.clear()
+                self._send_commands(result.commands)
             if result.quit:
                 self._stopping = True
             return
@@ -332,15 +351,20 @@ class Application:
         if not self.output.created:
             name = f"{name} (not created yet)"
         lines.append(f"logfile: {name}")
+        lines.append(f"scenarios: {self._scenario_summary()}")
         counts = self.output.counts()
         if counts:
             lines.append(f"logged events: {self.output.total}")
             for watchpoint in sorted(counts):
-                lines.append(f"  wp{watchpoint}: {counts[watchpoint]}")
+                lines.append(
+                    f"  {self._watchpoint_label(watchpoint)}: {counts[watchpoint]}"
+                )
         if self._definitions:
             lines.append("debugger watchpoints:")
             for key in sorted(self._definitions):
-                lines.append(f"  {key}: {self._definitions[key]}")
+                alias = self.scenarios.alias(key)
+                label = f"{key} ({alias})" if alias else f"{key}"
+                lines.append(f"  {label}: {self._definitions[key]}")
         return "\n".join(lines)
 
     def _toolbar_text(self) -> str:
@@ -349,11 +373,25 @@ class Application:
         counts = self.output.counts()
         if counts:
             parts = "  ".join(
-                f"wp{watchpoint}: {count}"
+                f"{self._watchpoint_label(watchpoint)}: {count}"
                 for watchpoint, count in sorted(counts.items())
             )
             text += f"  |  {parts}"
         return text
+
+    def _scenario_summary(self) -> str:
+        names = self.scenarios.active_names()
+        if names:
+            return ", ".join(names)
+        if self.scenarios.configured:
+            return f"none active ({', '.join(self.scenarios.names())} available)"
+        return "none"
+
+    def _watchpoint_label(self, watchpoint: int) -> str:
+        """Return the scenario alias for *watchpoint*, or ``wp<id>``."""
+
+        alias = self.scenarios.alias(watchpoint)
+        return alias if alias is not None else f"wp{watchpoint}"
 
     def _write(self, text: str) -> None:
         self.console.write(text)

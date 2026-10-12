@@ -34,10 +34,12 @@ class WrapperCompleter(Completer):
         prefix: str,
         commands: Sequence[str],
         arguments: dict[str, Sequence[str]] | None = None,
+        scenario_names: Callable[[], Sequence[str]] | None = None,
     ) -> None:
         self._prefix = prefix
         self._commands = tuple(commands)
         self._arguments = dict(arguments or {})
+        self._scenario_names = scenario_names
         self._path_completer = PathCompleter()
 
     def get_completions(self, document: Document, complete_event: CompleteEvent):
@@ -47,8 +49,6 @@ class WrapperCompleter(Completer):
         body = before[len(self._prefix) :].replace("\t", " ")
         if " " in body:
             command, _, argument = body.partition(" ")
-            if " " in argument:
-                return
             yield from self._argument_completions(command.lower(), argument, complete_event)
             return
         for name in self._commands:
@@ -59,14 +59,37 @@ class WrapperCompleter(Completer):
         self, command: str, argument: str, complete_event: CompleteEvent
     ):
         if command == "logfile":
+            if " " in argument:
+                return
             argument_document = Document(argument, len(argument))
             yield from self._path_completer.get_completions(
                 argument_document, complete_event
             )
             return
+        if command == "sci":
+            yield from self._sci_completions(argument)
+            return
+        if " " in argument:
+            return
         for choice in self._arguments.get(command, ()):
             if choice.startswith(argument):
                 yield Completion(choice, start_position=-len(argument))
+
+    def _sci_completions(self, argument: str):
+        subcommands = self._arguments.get("sci", ())
+        parts = argument.split(" ")
+        subword = parts[0]
+        if len(parts) == 1 and not argument.endswith(" "):
+            for sub in subcommands:
+                if sub.startswith(subword):
+                    yield Completion(sub, start_position=-len(subword))
+            return
+        if subword.lower() not in subcommands or self._scenario_names is None:
+            return
+        word = "" if argument.endswith(" ") else parts[-1]
+        for choice in ("*", *self._scenario_names()):
+            if choice.startswith(word):
+                yield Completion(choice, start_position=-len(word))
 
 
 class Console:

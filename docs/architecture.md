@@ -31,6 +31,7 @@ The shell launches FS-UAE as a child process on a pseudo-terminal (PTY) and owns
 | `src/fs_uae_debug_shell/parser.py` | Incremental debugger output parser and event types. |
 | `src/fs_uae_debug_shell/frames.py` | Per-frame selection of watchpoint hits (`FrameValueMode`, `FrameValueSelector`). |
 | `src/fs_uae_debug_shell/aggregate.py` | Per-frame condensation of hits into one row (`FrameAggregator`, `AggregatedFrame`). |
+| `src/fs_uae_debug_shell/scenarios.py` | `config.yaml` scenario model, validation loader, and the runtime alias/number registry (`ScenarioCatalog`, `WatchpointRegistry`). |
 | `src/fs_uae_debug_shell/commands.py` | Shell command parsing, dispatch, and the completion tables. |
 | `src/fs_uae_debug_shell/output.py` | Output routing: `OutputMode`, log-file naming, lazy CSV creation, per-watchpoint counters. |
 | `src/fs_uae_debug_shell/eventlog.py` | Append-only CSV event writer for the per-hit and per-frame schemas. |
@@ -86,7 +87,7 @@ The parser is incremental: it buffers partial lines across `feed_pieces()` calls
 
 `Application._on_hit` records a single hit and `_on_frame` records a condensed frame; both refresh the status line when logging. On a write failure the error is reported and the emulator is simply left stopped. Emulation is **never** resumed automatically; the user sends `g` (or any other command) themselves.
 
-`CommandDispatcher` provides `:output`, `:logfile`, `:framevalues`, and `:frameagg` to change those settings, plus `:help`, `:status`, and `:quit`.
+`CommandDispatcher` provides `:output`, `:logfile`, `:framevalues`, `:frameagg`, and `:sci` to change those settings, plus `:help`, `:status`, and `:quit`.
 
 ## Frame value selection
 
@@ -106,9 +107,22 @@ The columns are the watchpoint ids the wrapper knows about: ids from parsed `Mem
 
 `:frameagg` (default `on`) is exposed by `CommandDispatcher` and only applies to hits that carry a frame counter; classic hits and a disabled aggregator emit the original hit piece unchanged. The classic per-hit CSV schema and the wide per-frame schema are chosen by which record method the application calls (`OutputRouter.record` versus `record_frame`); `CsvEventWriter` carries the matching header and rejects records of the other shape.
 
+## Watchpoint scenarios
+
+Named watchpoints live in `config.yaml`, loaded by `cli` into `AppConfig.scenarios`. `scenarios.py` owns the whole concern:
+
+- `ScenarioCatalog` is the parsed, validated configuration: ordered scenarios, each a list of `ScenarioEntry` with defaults already applied;
+- `WatchpointRegistry` holds the runtime state: the next free watchpoint number, the active scenario to `(number, entry)` assignments, and the number to alias map.
+
+`CommandDispatcher._cmd_sci` adds or removes scenarios, asks the registry to assign or free numbers, and returns the generated `w` commands in `CommandResult.commands` (an add emits `w <num> <address> <length> <flags>...`, a remove emits `w <num>`); `Application._handle_line` sends them to the child and, like a forwarded command, drops the interactive prompt until the debugger prints `>` again. `:sci` with no argument lists the active scenarios, and `*` expands to every configured scenario (or every active one for `rm`).
+
+Aliases replace numbers in the wrapper's own output only: `Application._emit_aggregate` passes `WatchpointRegistry.aliases()` to `format_frame_line`, `OutputRouter` holds the same provider for the CSV writer (the per-hit `wp` cell and the wide per-frame header), and `_status_text`/`_toolbar_text` label counters and definitions through it. Verbatim debugger lines are never rewritten. `WatchpointRegistry` exposes the configured scenario names to `WrapperCompleter` so `:sci add`/`rm` complete scenario names.
+
+The configuration is validated by `parse_scenarios`, which raises `ConfigError` with a located message; `cli.parse_args` turns that into a startup abort. The `--config` path must exist if given; a missing default `./config.yaml` simply leaves the feature inert.
+
 ## Interactive input
 
-`Console` wraps a `prompt_toolkit` `PromptSession`. `WrapperCompleter` completes shell command names and their arguments (fixed choices for `:output`, filesystem paths for `:logfile`). The shell renders its own `> ` prompt through `prompt_toolkit` and hides the debugger's bare `>` so the cursor sits after the prompt rather than on top of it. In `log` mode, `Application._input_loop` passes a `bottom_toolbar` callback that renders the per-watchpoint counters as a fixed status line; `Console.refresh()` invalidates the prompt so the counters update as hits arrive.
+`Console` wraps a `prompt_toolkit` `PromptSession`. `WrapperCompleter` completes shell command names and their arguments (fixed choices for `:output`, filesystem paths for `:logfile`, configured scenario names for `:sci add`/`rm`). The shell renders its own `> ` prompt through `prompt_toolkit` and hides the debugger's bare `>` so the cursor sits after the prompt rather than on top of it. In `log` mode, `Application._input_loop` passes a `bottom_toolbar` callback that renders the per-watchpoint counters as a fixed status line; `Console.refresh()` invalidates the prompt so the counters update as hits arrive.
 
 The prompt follows the debugger's own input semantics in `shell` and `both` mode: it is raised only while the debugger is idle at its `>` prompt. `_input_loop` waits on `_prompt_ready`; a `PROMPT` event sets it, and forwarding a command clears it until the debugger prints `>` again. While emulation runs, and while a command's output is still arriving, no `prompt_toolkit` application is running, so `patch_stdout` writes child output straight to the terminal instead of erasing and repainting a prompt for every output batch.
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import csv
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -20,10 +20,21 @@ def _hex(value: int, width: int = 8) -> str:
     return f"0x{value:0{width}X}"
 
 
-def aggregated_header(columns: Sequence[int]) -> list[str]:
-    """Return the wide header used by frame aggregation, one column per watchpoint."""
+def aggregated_header(
+    columns: Sequence[int], labels: Mapping[int, str] | None = None
+) -> list[str]:
+    """Return the wide header used by frame aggregation, one column per watchpoint.
 
-    return ["timestamp", "frame", *(f"wp{watchpoint}" for watchpoint in columns)]
+    A column is named by its *labels* entry (a scenario alias) or, without one,
+    by ``wp<id>``.
+    """
+
+    names = labels or {}
+    return [
+        "timestamp",
+        "frame",
+        *(names.get(watchpoint, f"wp{watchpoint}") for watchpoint in columns),
+    ]
 
 
 class CsvEventWriter:
@@ -36,12 +47,19 @@ class CsvEventWriter:
     With *columns* the writer uses the wide frame-aggregation schema
     (``timestamp,frame,wp1,wp2,...``) and accepts whole frames via
     :meth:`append_frame`; without it the writer uses the per-hit schema and
-    accepts single hits via :meth:`append`.
+    accepts single hits via :meth:`append`.  *labels* names the watchpoint
+    columns (and the per-hit ``wp`` value) using scenario aliases when available.
     """
 
-    def __init__(self, path: Path, columns: Sequence[int] | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        columns: Sequence[int] | None = None,
+        labels: Mapping[int, str] | None = None,
+    ) -> None:
         self.path = Path(path)
         self._columns = None if columns is None else tuple(columns)
+        self._labels = dict(labels or {})
         try:
             is_new = not self.path.exists() or self.path.stat().st_size == 0
         except OSError as exc:
@@ -64,7 +82,7 @@ class CsvEventWriter:
     def _header(self) -> list[str]:
         if self._columns is None:
             return HEADER
-        return aggregated_header(self._columns)
+        return aggregated_header(self._columns, self._labels)
 
     def append(
         self,
@@ -81,7 +99,7 @@ class CsvEventWriter:
         row = [
             moment.isoformat(timespec="milliseconds"),
             hit.frame if hit.frame is not None else "",
-            hit.watchpoint,
+            self._labels.get(hit.watchpoint, hit.watchpoint),
             _hex(hit.address),
             hit.size,
             hit.access,

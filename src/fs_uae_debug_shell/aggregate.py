@@ -13,7 +13,7 @@ the hits are passed through unchanged.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from .parser import Piece
@@ -32,22 +32,29 @@ class AggregatedFrame:
 
 
 def format_frame_line(
-    frame: int, values: dict[int, int], columns: Sequence[int]
+    frame: int,
+    values: dict[int, int],
+    columns: Sequence[int],
+    labels: Mapping[int, str] | None = None,
 ) -> str:
     """Return the terminal line for an aggregated frame.
 
     Every known *column* is printed, so a watchpoint that did not write in this
     frame keeps its padding as blanks instead of being dropped; a missing value
-    must not look like a genuine one carried over from an earlier frame.
+    must not look like a genuine one carried over from an earlier frame.  A
+    column is named by its *labels* entry (a scenario alias) or, without one, by
+    its zero-padded watchpoint id.
     """
 
+    names = labels or {}
     parts = [f"{frame:0{FRAME_WIDTH}d}"]
     for watchpoint in columns:
+        name = names.get(watchpoint, f"{watchpoint:0{WATCHPOINT_WIDTH}d}")
         if watchpoint in values:
             cell = f"{values[watchpoint]:0{VALUE_WIDTH}X}"
         else:
             cell = " " * VALUE_WIDTH
-        parts.append(f"{watchpoint:0{WATCHPOINT_WIDTH}d}:{cell}")
+        parts.append(f"{name}:{cell}")
     return " ".join(parts)
 
 
