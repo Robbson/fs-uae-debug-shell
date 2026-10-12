@@ -26,11 +26,12 @@ The shell launches FS-UAE as a child process on a pseudo-terminal (PTY) and owns
 | `src/fs_uae_debug_shell/cli.py` | Argument parsing and wrapper logging setup. |
 | `src/fs_uae_debug_shell/config.py` | `AppConfig` runtime configuration dataclass. |
 | `src/fs_uae_debug_shell/app.py` | Orchestration: event loop, state, wiring. |
-| `src/fs_uae_debug_shell/session.py` | FS-UAE process ownership over a `pexpect` PTY; `SessionState`. |
+| `src/fs_uae_debug_shell/session.py` | FS-UAE process ownership over a `pexpect` PTY; `SessionState`; debugger activation by `SIGUSR1`. |
 | `src/fs_uae_debug_shell/terminal.py` | Interactive prompt via `prompt_toolkit`: line editing/history, completion (`WrapperCompleter`), `patch_stdout` output and the status line (`Console`). |
 | `src/fs_uae_debug_shell/parser.py` | Incremental debugger output parser and event types. |
 | `src/fs_uae_debug_shell/frames.py` | Per-frame selection of watchpoint hits (`FrameValueMode`, `FrameValueSelector`). |
 | `src/fs_uae_debug_shell/aggregate.py` | Per-frame condensation of hits into one row (`FrameAggregator`, `AggregatedFrame`). |
+| `src/fs_uae_debug_shell/dump.py` | Whether the debugger's CPU register dump is shown on the terminal (`RegisterDump`). |
 | `src/fs_uae_debug_shell/scenarios.py` | `config.yaml` scenario model, validation loader, and the runtime alias/number registry (`ScenarioCatalog`, `WatchpointRegistry`). |
 | `src/fs_uae_debug_shell/commands.py` | Shell command parsing, dispatch, and the completion tables. |
 | `src/fs_uae_debug_shell/output.py` | Output routing: `OutputMode`, log-file naming, lazy CSV creation, per-watchpoint counters. |
@@ -43,10 +44,14 @@ The shell launches FS-UAE as a child process on a pseudo-terminal (PTY) and owns
 1. `Session.start` spawns FS-UAE on a PTY with child echo disabled.
 2. `Application._run_async` registers the child PTY fd with `loop.add_reader` and enters `Console.patched_stdout()`.
 3. Child output: the reader callback decodes the text and passes it to `DebuggerOutputParser.feed_pieces`, which returns `Piece`s in order (the exact text plus any structured `Event`). Everything produced by one read is written to the terminal in a single `Console.write` call.
-4. `Application._handle_piece` routes each piece. Watchpoint hits pass through `FrameValueSelector`, which keeps the chosen value per frame and watchpoint (`:framevalues`); with `:frameagg` on and a frame counter present, the selected hits then pass through `FrameAggregator`, which condenses each frame into one row. The resulting hit or frame is shown and/or logged according to `OutputRouter`. `_process_events` updates debugger definitions and tracks the prompt.
+4. `Application._handle_piece` routes each piece. Pieces marked as part of a CPU register dump are dropped when `:showdump` is `off`. Watchpoint hits pass through `FrameValueSelector`, which keeps the chosen value per frame and watchpoint (`:framevalues`); with `:frameagg` on and a frame counter present, the selected hits then pass through `FrameAggregator`, which condenses each frame into one row. The resulting hit or frame is shown and/or logged according to `OutputRouter`. `_process_events` updates debugger definitions and tracks the prompt.
 5. Input: `Console.prompt_async` returns one edited line. `Application` dispatches lines starting with the shell prefix to `CommandDispatcher`; everything else is written to the child PTY unchanged.
 
 The interactive prompt is only raised while the debugger is idle at its own `>` prompt (see below) — except in `log` mode, where it stays up for the status line — so the bulk of debugger output is written directly rather than repainted above a prompt.
+
+## Startup debugger activation
+
+With `--startdebug`, `cli.parse_args` prefixes the FS-UAE arguments with `--console_debugger=1 --debugger_signal=1 --stdout` (unless the user already supplied them) and sets `AppConfig.start_debug`. The forked FS-UAE build installs a `SIGUSR1` handler and prints `debugger_signal: sending SIGUSR1 will activate the debugger`; the parser recognises that marker as a `DEBUGGER_SIGNAL_READY` event, and `Application._activate_debugger` sends `SIGUSR1` exactly once through `Session.activate_debugger`. The marker gates the signal because an earlier `SIGUSR1` would use the default action and kill the process. Without the flag the marker is ignored and activation stays manual (F12+D), preserving the transparent default.
 
 ## State model
 
@@ -87,7 +92,7 @@ The parser is incremental: it buffers partial lines across `feed_pieces()` calls
 
 `Application._on_hit` records a single hit and `_on_frame` records a condensed frame; both refresh the status line when logging. On a write failure the error is reported and the emulator is simply left stopped. Emulation is **never** resumed automatically; the user sends `g` (or any other command) themselves.
 
-`CommandDispatcher` provides `:output`, `:logfile`, `:framevalues`, `:frameagg`, and `:sci` to change those settings, plus `:help`, `:status`, and `:quit`.
+`CommandDispatcher` provides `:output`, `:logfile`, `:framevalues`, `:frameagg`, `:showdump`, and `:sci` to change those settings, plus `:help`, `:status`, and `:quit`.
 
 ## Frame value selection
 
@@ -106,6 +111,10 @@ A hit without a frame counter (classic output) is always emitted and ignores the
 The columns are the watchpoint ids the wrapper knows about: ids from parsed `Memwatch` definitions (seeded through `_process_events`) plus ids seen in hits (added in `Application._emit_hit`). A watchpoint first seen after the log file was created cannot fit the frozen header and is reported as a logging error.
 
 `:frameagg` (default `on`) is exposed by `CommandDispatcher` and only applies to hits that carry a frame counter; classic hits and a disabled aggregator emit the original hit piece unchanged. The classic per-hit CSV schema and the wide per-frame schema are chosen by which record method the application calls (`OutputRouter.record` versus `record_frame`); `CsvEventWriter` carries the matching header and rejects records of the other shape.
+
+## CPU register dump filtering
+
+The debugger prints a CPU register dump whenever it stops (manual activation or a watchpoint break). The parser brackets the block between the `-- stub -- activate_console` marker and the `Next PC:` line and marks every piece in between with `Piece.in_dump`, so a split read keeps the boundary in the parser's state (and the debugger prompt clears it). `Application._handle_piece` drops those pieces when `RegisterDump.enabled` is false. The introducing `WARNING: Activated debugger` / `Memwatch ...` lines are not part of the block and stay visible, and the `r` command's dump has no stub marker so it is never matched. The setting is terminal-only and does not affect logging; `:showdump on|off` (default `on`) toggles it.
 
 ## Watchpoint scenarios
 

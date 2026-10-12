@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import signal
 from enum import Enum
 
 import pexpect
@@ -80,6 +81,22 @@ class Session:
         """Send a single console command terminated by a newline."""
 
         self.send_bytes(text.encode("utf-8", errors="replace") + b"\n")
+
+    def activate_debugger(self) -> None:
+        """Ask FS-UAE to enter its debugger by sending ``SIGUSR1``.
+
+        Only supported by the forked FS-UAE build, and only once it has printed
+        its signal-ready marker; signalling earlier uses the default action and
+        kills the process.  Raises :class:`SessionError` when the signal cannot
+        be delivered.
+        """
+
+        if self.child is None:
+            raise SessionError("session not started")
+        try:
+            os.kill(self.child.pid, signal.SIGUSR1)
+        except OSError as exc:
+            raise SessionError(f"cannot send SIGUSR1 to FS-UAE: {exc}") from exc
 
     def set_dimensions(self, rows: int, columns: int) -> None:
         if self.child is None:

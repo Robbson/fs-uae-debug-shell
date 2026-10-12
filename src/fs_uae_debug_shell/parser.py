@@ -17,6 +17,7 @@ class EventType(Enum):
 
     PROMPT = "prompt"
     DEBUGGER_ACTIVATED = "debugger_activated"
+    DEBUGGER_SIGNAL_READY = "debugger_signal_ready"
     WATCHPOINTS_ENABLED = "watchpoints_enabled"
     WATCHPOINT_DEFINED = "watchpoint_defined"
     WATCHPOINT_HIT = "watchpoint_hit"
@@ -70,12 +71,16 @@ class Piece:
 
     ``text`` is the raw text to display (including its line ending, when
     present) so that callers can forward output unchanged.  ``event`` is the
-    structured event the line produced, if any.  A prompt is emitted as a
-    ``">"`` piece followed by a piece for the remainder of that line.
+    structured event the line produced, if any.  ``in_dump`` marks a line that
+    belongs to the CPU register dump the debugger prints when it stops (the
+    block bracketed by ``-- stub -- activate_console`` and ``Next PC:``), so a
+    caller can choose to hide it.  A prompt is emitted as a ``">"`` piece
+    followed by a piece for the remainder of that line.
     """
 
     text: str
     event: Event | None = None
+    in_dump: bool = False
 
 
 # Confirmed hit formats from real sessions:
@@ -101,6 +106,21 @@ _DEF_RE = re.compile(
 _ACTIVATED_LINE = "WARNING: Activated debugger"
 _WATCHPOINTS_ENABLED_LINE = "Memwatch breakpoints enabled"
 
+# The forked FS-UAE build prints this marker once its SIGUSR1 handler is
+# installed; the wrapper may only signal the process after this point, since an
+# earlier SIGUSR1 uses the default action and kills FS-UAE.  Confirmed on the
+# fs-uae-3 fork (see the upstream debugger skill); the surrounding prefix, if
+# any, is not matched so the marker is recognised wherever it is printed.
+_SIGNAL_READY_MARKER = "sending SIGUSR1 will activate the debugger"
+
+# The CPU register dump the debugger prints when it stops is bracketed by these
+# two lines: the stub marker the debugger prints on entering the console and the
+# ``Next PC:`` line that closes the disassembly.  Confirmed on FS-UAE 3.2.35/3.3.0
+# (see ``tests/fixtures``).  The user-run ``r`` command prints a similar dump
+# without the stub marker, so it is deliberately not part of this block.
+_DUMP_START_LINE = "-- stub -- activate_console"
+_DUMP_END_PREFIX = "Next PC:"
+
 
 def parse_line(line: str) -> Event | None:
     """Parse a single complete debugger output line into an event."""
@@ -112,6 +132,8 @@ def parse_line(line: str) -> Event | None:
         return Event(EventType.DEBUGGER_ACTIVATED, line=stripped)
     if stripped == _WATCHPOINTS_ENABLED_LINE:
         return Event(EventType.WATCHPOINTS_ENABLED, line=stripped)
+    if _SIGNAL_READY_MARKER in stripped:
+        return Event(EventType.DEBUGGER_SIGNAL_READY, line=stripped)
 
     match = _HIT_RE.match(stripped)
     if match is not None:
@@ -156,6 +178,7 @@ class DebuggerOutputParser:
 
     def __init__(self) -> None:
         self._buffer = ""
+        self._in_dump = False
 
     def feed(self, text: str) -> list[Event]:
         """Consume *text* (may be partial) and return any complete events."""
@@ -186,6 +209,7 @@ class DebuggerOutputParser:
             newline = buffer.find("\n", start)
             if newline == -1:
                 if buffer[start] == ">":
+                    self._in_dump = False
                     pieces.append(Piece(">", Event(EventType.PROMPT, line=">")))
                     start += 1
                     continue
@@ -194,6 +218,7 @@ class DebuggerOutputParser:
             line = buffer[start:newline].rstrip("\r")
             start = newline + 1
             if line.startswith(">"):
+                self._in_dump = False
                 pieces.append(Piece(">", Event(EventType.PROMPT, line=">")))
                 remainder = line[1:]
                 if remainder.strip():
@@ -201,9 +226,28 @@ class DebuggerOutputParser:
                 else:
                     pieces.append(Piece(raw[1:]))
                 continue
-            pieces.append(Piece(raw, parse_line(line)))
+            in_dump = self._advance_dump(line)
+            pieces.append(Piece(raw, parse_line(line), in_dump=in_dump))
         self._buffer = buffer[start:]
         return pieces
+
+    def _advance_dump(self, line: str) -> bool:
+        """Track whether *line* is part of a CPU register dump block.
+
+        Returns ``True`` while inside the block bracketed by
+        ``-- stub -- activate_console`` and ``Next PC:``, and updates the
+        parser's state so that a partial read does not lose the boundary.
+        """
+
+        stripped = line.strip()
+        if self._in_dump:
+            if stripped.startswith(_DUMP_END_PREFIX):
+                self._in_dump = False
+            return True
+        if stripped == _DUMP_START_LINE:
+            self._in_dump = True
+            return True
+        return False
 
     @property
     def pending(self) -> str:

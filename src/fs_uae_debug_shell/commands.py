@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .aggregate import FrameAggregator
+from .dump import RegisterDump
 from .frames import FrameValueMode, FrameValueSelector
 from .output import OutputMode, OutputRouter
 from .scenarios import WatchpointRegistry
@@ -36,6 +37,8 @@ shell commands (prefix '{prefix}'):
                                      (default: first; ignored without a frame counter)
   {prefix}frameagg on|off            condense each frame into one row of
                                      watchpoint values (default: on)
+  {prefix}showdump on|off            show the CPU register dump the debugger
+                                     prints when it stops (default: on)
   {prefix}sci [add|rm <scenario>...] configure watchpoint scenarios from
                                      config.yaml ('*' selects every scenario;
                                      no argument lists the active ones)
@@ -49,6 +52,7 @@ COMMANDS = (
     "logfile",
     "framevalues",
     "frameagg",
+    "showdump",
     "sci",
     "quit",
 )
@@ -56,6 +60,7 @@ ARGUMENT_CHOICES: dict[str, tuple[str, ...]] = {
     "output": ("shell", "log", "both"),
     "framevalues": ("first", "last", "all"),
     "frameagg": ("on", "off"),
+    "showdump": ("on", "off"),
     "sci": ("add", "rm"),
 }
 
@@ -72,12 +77,14 @@ class CommandDispatcher:
         aggregate: FrameAggregator,
         scenarios: WatchpointRegistry,
         status_provider: Callable[[], str],
+        dump: RegisterDump | None = None,
     ) -> None:
         self.prefix = prefix
         self.output = output
         self.frames = frames
         self.aggregate = aggregate
         self.scenarios = scenarios
+        self.dump = dump if dump is not None else RegisterDump()
         self._status_provider = status_provider
 
     def handles(self, line: str) -> bool:
@@ -170,6 +177,20 @@ class CommandDispatcher:
             raise UsageError(usage)
         self.aggregate.set_enabled(value == "on")
         return CommandResult(output=f"frame aggregation: {value}")
+
+    def _cmd_showdump(self, args: list[str]) -> CommandResult:
+        usage = f"usage: {self.prefix}showdump on|off"
+        if not args:
+            return CommandResult(
+                output=f"register dump: {self._on_off(self.dump.enabled)}"
+            )
+        if len(args) != 1:
+            raise UsageError(usage)
+        value = args[0].lower()
+        if value not in ("on", "off"):
+            raise UsageError(usage)
+        self.dump.set_enabled(value == "on")
+        return CommandResult(output=f"register dump: {value}")
 
     def _cmd_sci(self, args: list[str]) -> CommandResult:
         usage = f"usage: {self.prefix}sci [add|rm <scenario> ...]"

@@ -97,6 +97,24 @@ class ParseLineTests(unittest.TestCase):
         assert event is not None
         self.assertEqual(event.type, EventType.WATCHPOINTS_ENABLED)
 
+    def test_debugger_signal_ready_line(self) -> None:
+        event = parse_line(
+            "debugger_signal: sending SIGUSR1 will activate the debugger "
+            "(requires console_debugger)"
+        )
+        self.assertIsNotNone(event)
+        assert event is not None
+        self.assertEqual(event.type, EventType.DEBUGGER_SIGNAL_READY)
+
+    def test_debugger_signal_ready_line_with_prefix(self) -> None:
+        event = parse_line(
+            "LOG: debugger_signal: sending SIGUSR1 will activate the debugger "
+            "(requires console_debugger)"
+        )
+        self.assertIsNotNone(event)
+        assert event is not None
+        self.assertEqual(event.type, EventType.DEBUGGER_SIGNAL_READY)
+
     def test_watchpoint_definition_line(self) -> None:
         event = parse_line(" 0: 00000574 - 00000575 (2)  W  CPU")
         self.assertIsNotNone(event)
@@ -119,6 +137,74 @@ class ParseLineTests(unittest.TestCase):
             "No breakpoints",
         ]:
             self.assertIsNone(parse_line(line), line)
+
+
+class RegisterDumpTests(unittest.TestCase):
+    """Pieces of the CPU register dump are flagged so they can be hidden."""
+
+    BLOCK = (
+        " -- stub -- activate_console \n"
+        "  D0 00000F30   D1 00000028   D2 0000FFFF   D3 00000000 \n"
+        "  A7 0007FFF8 \n"
+        "USP  00C0BEF4 ISP  0007FFF8 \n"
+        "T=00 S=1 M=0 X=0 N=0 Z=1 V=0 C=0 IMASK=3 STP=0\n"
+        "Prefetch fffe (ILLEGAL) 48e7 (MVMLE) Chip latch 0000FFFE\n"
+        "00008A6A 48e7 fffe                MOVEM.L D0-D7/A0-A6,-(A7)\n"
+        "Next PC: 00008a6e\n"
+    )
+
+    def test_dump_block_is_marked(self) -> None:
+        pieces = DebuggerOutputParser().feed_pieces(self.BLOCK)
+        self.assertTrue(all(piece.in_dump for piece in pieces))
+        self.assertEqual(pieces[0].text, " -- stub -- activate_console \n")
+        self.assertEqual(pieces[-1].text, "Next PC: 00008a6e\n")
+        self.assertTrue(all(piece.event is None for piece in pieces))
+
+    def test_line_after_dump_is_not_marked(self) -> None:
+        pieces = DebuggerOutputParser().feed_pieces(self.BLOCK + "No breakpoints\n")
+        self.assertFalse(pieces[-1].in_dump)
+
+    def test_other_stub_lines_are_not_marked(self) -> None:
+        pieces = DebuggerOutputParser().feed_pieces(
+            ' -- stub -- target_addtorecent name="x" t=0\n'
+        )
+        self.assertFalse(pieces[0].in_dump)
+
+    def test_user_run_dump_is_not_marked(self) -> None:
+        # The ``r`` command prints a similar dump without the stub marker, so it
+        # stays transparent and is left untouched.
+        pieces = DebuggerOutputParser().feed_pieces(
+            ">r\n  D0 00000F30   D1 00000028\nNext PC: 00008a6e\n"
+        )
+        self.assertFalse(any(piece.in_dump for piece in pieces))
+
+    def test_dump_boundary_survives_chunking(self) -> None:
+        parser = DebuggerOutputParser()
+        first = parser.feed_pieces(" -- stub -- activate_console\n  D0 00000F30\n")
+        self.assertTrue(all(piece.in_dump for piece in first))
+        second = parser.feed_pieces(
+            "Next PC: 00008a6e\nMemwatch breakpoints enabled\n"
+        )
+        self.assertTrue(second[0].in_dump)
+        self.assertFalse(second[1].in_dump)
+
+    def test_prompt_ends_dump(self) -> None:
+        parser = DebuggerOutputParser()
+        parser.feed_pieces(" -- stub -- activate_console\n  D0 00000F30\n")
+        pieces = parser.feed_pieces(">")
+        self.assertFalse(pieces[-1].in_dump)
+        assert pieces[-1].event is not None
+        self.assertEqual(pieces[-1].event.type, EventType.PROMPT)
+        pieces = parser.feed_pieces("No breakpoints\n")
+        self.assertFalse(pieces[-1].in_dump)
+
+    def test_activation_is_not_in_dump(self) -> None:
+        pieces = DebuggerOutputParser().feed_pieces(
+            "WARNING: Activated debugger\n" + self.BLOCK
+        )
+        self.assertFalse(pieces[0].in_dump)
+        self.assertTrue(pieces[1].in_dump)
+
 
 
 class ParserStreamTests(unittest.TestCase):

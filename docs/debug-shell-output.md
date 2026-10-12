@@ -26,6 +26,34 @@ Next PC: 00008a6e
 
 The prompt is a bare `>` at the start of a line.  It is **not** newline terminated, so the parser recognises it as soon as it appears at a line start.
 
+## Debugger signal marker (forked build)
+
+The forked FS-UAE build, launched with `debugger_signal=1`, prints this line once its `SIGUSR1` handler is installed and the debugger can be entered:
+
+```text
+debugger_signal: sending SIGUSR1 will activate the debugger (requires console_debugger)
+```
+
+The wrapper must not send `SIGUSR1` before this marker (an earlier signal uses the default action and kills the process), so the line is recognised as the `DEBUGGER_SIGNAL_READY` event that drives `--startdebug`.  It is a plain log line and may carry a prefix, so the parser matches the distinctive `sending SIGUSR1 will activate the debugger` text rather than the whole line.
+
+## CPU register dump
+
+Both a manual activation and a watchpoint break print the same CPU register dump, bracketed by the stub marker and the `Next PC:` line:
+
+```text
+ -- stub -- activate_console 
+  D0 00000F30   D1 00000028   D2 0000FFFF   D3 00000000 
+  ...
+  A7 0007FFF8 
+USP  00C0BEF4 ISP  0007FFF8 
+T=00 S=1 M=0 X=0 N=0 Z=1 V=0 C=0 IMASK=3 STP=0
+Prefetch fffe (ILLEGAL) 48e7 (MVMLE) Chip latch 0000FFFE
+00008A6A 48e7 fffe                MOVEM.L D0-D7/A0-A6,-(A7)
+Next PC: 00008a6e
+```
+
+The block is introduced by either `WARNING: Activated debugger` (manual activation) or a `Memwatch ...:` hit line (watchpoint break); neither introducing line is part of the block.  The debugger's `r` command prints a similar register/flag/disassembly dump **without** the `-- stub -- activate_console` marker, so it never matches and is treated as ordinary forwarded output.  The parser marks the bracketed lines as part of the dump (`Piece.in_dump`); the shell can hide them with `:showdump off` (see `README.md`), otherwise they are forwarded verbatim.
+
 ## Adding a watchpoint
 
 ```text

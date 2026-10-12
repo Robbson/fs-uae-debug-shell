@@ -15,11 +15,42 @@ USAGE_EPILOG = """\
 example:
   %(prog)s -- --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae
 
-Press F12+D in the FS-UAE window to activate the debugger console.  Type
+Press F12+D in the FS-UAE window to activate the debugger console, or pass
+--startdebug to activate it at startup on the forked FS-UAE build.  Type
 ':help' at the debugger prompt to list wrapper commands.  FS-UAE command line
 arguments must follow '--' so they are not interpreted by the wrapper."""
 
 DEFAULT_CONFIG_NAME = "config.yaml"
+
+# Options the forked FS-UAE build needs to activate its debugger on SIGUSR1.
+# ``console_debugger`` makes the debugger available, ``debugger_signal`` installs
+# the handler, and ``stdout`` routes the log (including the "sending SIGUSR1
+# will activate the debugger" marker) to the console the wrapper reads.
+_START_DEBUG_ARGS = (
+    "--console_debugger=1",
+    "--debugger_signal=1",
+    "--stdout",
+)
+
+
+def _has_option(args: list[str], name: str) -> bool:
+    return any(arg == name or arg.startswith(name + "=") for arg in args)
+
+
+def ensure_start_debug_args(args: list[str]) -> list[str]:
+    """Return *args* prefixed with the options needed to activate the debugger.
+
+    An option the user already supplied is left untouched, so their own value
+    wins; the injected options come first so later user arguments still override
+    them.
+    """
+
+    prefix = [
+        option
+        for option in _START_DEBUG_ARGS
+        if not _has_option(args, option.split("=", 1)[0])
+    ]
+    return prefix + list(args)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,6 +77,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=":",
         metavar="CHAR",
         help="wrapper command prefix (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--startdebug",
+        action="store_true",
+        help="activate the debugger at startup via SIGUSR1 instead of waiting "
+        "for F12+D (requires the forked FS-UAE build)",
     )
     parser.add_argument(
         "-v",
@@ -92,6 +129,8 @@ def parse_args(argv: list[str] | None = None, cwd: Path | None = None) -> AppCon
     fsuae_args = list(namespace.fsuae_args)
     if fsuae_args and fsuae_args[0] == "--":
         fsuae_args = fsuae_args[1:]
+    if namespace.startdebug:
+        fsuae_args = ensure_start_debug_args(fsuae_args)
     path = resolve_config_path(namespace.config, (cwd or Path.cwd()))
     scenarios = load_scenarios(path) if path is not None else ScenarioCatalog.empty()
     return AppConfig(
@@ -99,6 +138,7 @@ def parse_args(argv: list[str] | None = None, cwd: Path | None = None) -> AppCon
         fsuae_args=fsuae_args,
         prefix=namespace.prefix,
         verbose=namespace.verbose,
+        start_debug=namespace.startdebug,
         scenarios=scenarios,
         config_path=str(path) if path is not None else None,
     )

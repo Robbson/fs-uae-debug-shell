@@ -24,7 +24,7 @@ These hold for the whole life of the project and must not be tied to a particula
 
 ### 3.1 Transparent interactive wrapper
 
-- The debugger is not active at FS-UAE startup. It becomes active when the user presses F12 + D, or when a watchpoint triggers a break. Activation prints `WARNING: Activated debugger`, then a register dump, then the interactive `>` prompt.
+- The debugger is not active at FS-UAE startup unless the wrapper was started with `--startdebug`, which enters it via `SIGUSR1` on the forked build. Otherwise it becomes active when the user presses F12 + D, or when a watchpoint triggers a break. Activation prints `WARNING: Activated debugger`, then a register dump, then the interactive `>` prompt.
 - Forward all non-wrapper input to FS-UAE unchanged; support commands that produce multiple lines of output.
 - Avoid unnecessary buffering or added latency; read child output continuously without blocking input.
 - Handle Ctrl-C, EOF, process termination, and unexpected child-process exits.
@@ -76,7 +76,7 @@ fs-uae --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae
 ```
 
 Do not scan the filesystem for FS-UAE configurations; use exactly these arguments. The configuration is already prepared for terminal debugging.
-- The debugger cannot be activated programmatically. Ask the user to press F12 + D once the game is running, and state clearly when human interaction is required.
+- The forked build can be activated programmatically: `--startdebug` sends `SIGUSR1` once the signal-ready marker appears. Without it, ask the user to press F12 + D once the game is running, and state clearly when human interaction is required.
 - Permanently changing variables that are useful for watchpoint testing; ball position (x, y, vx, vy):
 - `$574` (word), `$576` (word), `$580` (word), `$582` (word).
 

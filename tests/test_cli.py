@@ -62,6 +62,54 @@ class ParseArgsTests(unittest.TestCase):
         self.assertEqual(config.fsuae_args, ["--load_state=2", "game.fs-uae"])
 
 
+class StartDebugTests(unittest.TestCase):
+    def test_default_is_off(self) -> None:
+        config = cli.parse_args(["--", "--load_state=2", "game.fs-uae"])
+        self.assertFalse(config.start_debug)
+        self.assertEqual(config.fsuae_args, ["--load_state=2", "game.fs-uae"])
+
+    def test_adds_debugger_options(self) -> None:
+        config = cli.parse_args(["--startdebug", "--", "--load_state=2", "game.fs-uae"])
+        self.assertTrue(config.start_debug)
+        self.assertEqual(
+            config.fsuae_args,
+            [
+                "--console_debugger=1",
+                "--debugger_signal=1",
+                "--stdout",
+                "--load_state=2",
+                "game.fs-uae",
+            ],
+        )
+
+    def test_does_not_duplicate_supplied_options(self) -> None:
+        config = cli.parse_args(
+            [
+                "--startdebug",
+                "--",
+                "--console_debugger=1",
+                "--debugger_signal=1",
+                "--stdout",
+                "game.fs-uae",
+            ]
+        )
+        self.assertEqual(
+            config.fsuae_args,
+            [
+                "--console_debugger=1",
+                "--debugger_signal=1",
+                "--stdout",
+                "game.fs-uae",
+            ],
+        )
+
+    def test_ensure_start_debug_args_detects_key_form(self) -> None:
+        args = cli.ensure_start_debug_args(
+            ["--console_debugger", "1", "--debugger_signal=1"]
+        )
+        self.assertEqual(args, ["--stdout", "--console_debugger", "1", "--debugger_signal=1"])
+
+
 class MainTests(unittest.TestCase):
     def test_invalid_config_aborts_with_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

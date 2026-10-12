@@ -31,11 +31,13 @@ FS-UAE starts the emulator normally. The debugger is **not** active at startup, 
 1. When the game is running, press **F12 + D** in the FS-UAE window.
 2. FS-UAE prints `WARNING: Activated debugger`, a register dump, and the interactive `>` prompt; the wrapper raises its own `> ` prompt at that point.
 
+With `--startdebug` the wrapper activates the debugger for you instead, so it is ready at the prompt from the very beginning (see below).
+
 From here the debugger behaves as usual. While the game is running FS-UAE's debugger accepts no console input, so the wrapper shows no prompt, and debugger output is written straight to the terminal rather than repainted above an active prompt.
 
 Shell-specific commands use the reserved prefix `:` (configurable with `--prefix`). They are intercepted by the wrapper and never reach the emulator; every other line is forwarded to FS-UAE unchanged.
 
-The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.readthedocs.io/), so it supports cursor movement (Left/Right), Home/End, Backspace/Delete, and command history with the Up/Down arrows. Press **Tab** for completion of shell command names and their parameters (`:output shell|log|both`, `:logfile` paths). History is kept in memory for the current session. In `shell`/`both` mode the prompt is shown only while the debugger is at its `>` prompt; in `log` mode it stays up while the game runs so the status line keeps showing progress. Shell commands (including `:quit`) are available once the debugger is active.
+The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.readthedocs.io/), so it supports cursor movement (Left/Right), Home/End, Backspace/Delete, and command history with the Up/Down arrows. Press **Tab** for completion of shell command names and their parameters (`:output shell|log|both`, `:showdump on|off`, `:logfile` paths). History is kept in memory for the current session. In `shell`/`both` mode the prompt is shown only while the debugger is at its `>` prompt; in `log` mode it stays up while the game runs so the status line keeps showing progress. Shell commands (including `:quit`) are available once the debugger is active.
 
 ### Options
 
@@ -43,8 +45,19 @@ The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.r
 --fsuae PATH             FS-UAE executable to launch (default: fs-uae)
 --config PATH            watchpoint scenario file (default: ./config.yaml when present)
 --prefix CHAR            shell command prefix (default: :)
+--startdebug             activate the debugger at startup (forked FS-UAE only)
 -v, --verbose            debug-level wrapper diagnostics
 ```
+
+### Start the debugger at startup
+
+The forked FS-UAE build (3.3.0 and above) can enter its debugger when it receives `SIGUSR1`, so you do not have to press F12+D. `--startdebug` uses this: the wrapper launches FS-UAE with `--console_debugger=1 --debugger_signal=1 --stdout` (any of these you pass yourself is left unchanged) and, once FS-UAE prints its `debugger_signal: sending SIGUSR1 will activate the debugger` marker, sends the signal to the child. The order matters: signalling before FS-UAE installs the handler would kill the process, which is why the wrapper waits for that marker.
+
+```sh
+uv run main.py --startdebug -- --load_state=2 ~/FS-UAE/Configurations/HotShot.fs-uae
+```
+
+The emulator boots at the loaded point, the debugger activates on the next frame, and the wrapper's `> ` prompt appears as soon as FS-UAE prints its own. Without `--startdebug` the wrapper behaves exactly as before and waits for F12+D. `SIGUSR1` is only available on POSIX hosts and only in the forked build; on anything else FS-UAE rejects the added options or never prints the marker, and you fall back to F12+D.
 
 ## Shell commands
 
@@ -56,6 +69,7 @@ The input line is provided by [`prompt_toolkit`](https://python-prompt-toolkit.r
 | `:logfile <file>` | Set the CSV log file name. |
 | `:framevalues first\|last\|all` | Keep which write of each frame per watchpoint (default: `first`; ignored for classic output). |
 | `:frameagg on\|off` | Condense each frame into one row of watchpoint values (default: `on`). |
+| `:showdump on\|off` | Show the debugger's CPU register dump on each stop (default: `on`). |
 | `:sci [add\|rm <scenario> ...]` | Activate or remove watchpoint scenarios from `config.yaml` (`*` selects every scenario; no argument lists the active ones). |
 | `:quit` | Stop the emulator and exit the shell. |
 
@@ -189,6 +203,21 @@ The same view shapes the CSV log (see below): one row per frame with one column 
 
 Columns are the watchpoints the wrapper knows about — those defined with `w` (the debugger's `Memwatch breakpoint enabled` definition lines) plus any seen in a hit. Define your watchpoints before you start logging; a watchpoint that first appears after the aggregation header has been written is reported as a logging error and needs a new `:logfile`. `:frameagg` applies only to the enhanced output that carries a frame counter; the classic output without one is passed through unchanged. `:framevalues` still chooses which write of each frame and watchpoint is kept before aggregation.
 
+## CPU register dump
+
+When the debugger stops — on a manual activation (F12+D) or on a watchpoint break — FS-UAE prints a CPU register dump: a `-- stub -- activate_console` marker, the `D0`–`A7` register lines, `USP`/`ISP`, the status-register flags, the prefetch and disassembled instruction, and a closing `Next PC:` line:
+
+```text
+WARNING: Activated debugger
+ -- stub -- activate_console
+  D0 00000000   D1 00000000   D2 0000000F   D3 0000FFFF
+  ...
+Next PC: 0000c29c
+>
+```
+
+`:showdump on|off` (default `on`) chooses whether this block is written to the terminal. With `off` it is removed from the screen, so repeated stops no longer scroll older output away; the `WARNING: Activated debugger` line and the watchpoint `Memwatch ...` line that introduce it are not part of the block and are still shown, and exception output such as a logging failure is never hidden. Only this automatically printed dump is matched: the dump printed by the `r` command has no stub marker and is forwarded unchanged. The setting affects the terminal only — it does not change what is logged, and emulation is still left stopped as usual.
+
 ## Watchpoint logging workflow
 
 Watchpoints are created with the native debugger command `w` (see the debugger's own `help`). The wrapper only *observes* them:
@@ -271,13 +300,14 @@ They cover parsing (including partial/multi-line output), per-frame hit selectio
 
 ### Checks
 
-- `uv run python -m unittest discover -s tests` — 224 tests, all passing.
+- `uv run python -m unittest discover -s tests` — 257 tests, all passing.
 - `uvx ruff check .` — clean.
 - No type checker (mypy/pyright) is configured in this project.
 
 ## Known limitations
 
 - Only output formats confirmed against FS-UAE 3.3.0 or higher are parsed. Other versions or WinUAE differ.
+- `--startdebug` needs the forked FS-UAE build and a POSIX host, because it activates the debugger with `SIGUSR1`. It also passes `--stdout` so the signal-ready marker reaches the wrapper's console; the debugger is activated by the wrapper, so no keyboard interaction is needed.
 - Watchpoints are created with the native `w` command; the wrapper does not create them for you. A scenario, however, does: it builds and sends the `w` commands for its entries.
 - The wrapper does not track watchpoints created manually with `w`. A scenario always assigns the next unused number, so activating one after manual `w` commands can overwrite a number you used by hand. Define scenarios and manual watchpoints so their numbers do not collide, or activate scenarios first.
 - A watchpoint added with several flags (`w 1 574 2 W C L`) prints a definition line whose exact shape is not yet captured, and the parser only knows the single-flag definition form. Such definitions may be absent from `:status`; frame-aggregation columns are still learned from the hits themselves.

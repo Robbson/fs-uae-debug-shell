@@ -121,3 +121,19 @@ Why the _Debug Shell_ is built the way it is.  Each record captures the context,
 **Decision.** Parse `config.yaml` with PyYAML (the only added runtime dependency) and validate it in `scenarios.parse_scenarios` with hand-written checks that raise `ConfigError` carrying the exact location (for example `config.yaml: memwatch.scenarios.ball[1]: 'address' must be a hexadecimal string`).  Ship `config.schema.json` describing the same rules so editors can validate and complete the file, and document that the runtime validator is authoritative.
 
 **Consequences.** The dependency footprint stays at one well-known package, and error messages are precise and actionable rather than generic.  The schema file and the validator must be kept in step by hand; both are small and stable.  Validation runs before FS-UAE starts, so an invalid file fails fast and visibly.
+
+## ADR-0016: Opt-in hiding of the CPU register dump
+
+**Context.** Whenever the debugger stops — on a manual activation (F12+D) or on a watchpoint break — it prints a CPU register dump: the `-- stub -- activate_console` marker, the `D0`–`A7` registers, `USP`/`ISP`, the status-register flags, the prefetch and disassembled instruction, and a `Next PC:` line.  On a run with many breaks this block repeats on every stop and scrolls the wrapper's own output away, but the transparent default must still show it.
+
+**Decision.** Add `:showdump on|off` (default `on`) backed by a `RegisterDump` setting (`dump.py`).  The parser recognises the block bracketed by the stub marker and the `Next PC:` line and marks every piece in between with `Piece.in_dump`; `Application._handle_piece` drops those pieces when the setting is off.  Only that automatically printed block is matched: the dump printed by the `r` command has no stub marker and is forwarded unchanged.  The setting affects the terminal only and never the log.
+
+**Consequences.** The default stays fully transparent, while a user with a dense break stream can hide the repetitive dump without touching logging or emulated state.  Detection keys on the confirmed stub marker, so a version that changes the dump framing simply stops being filtered instead of hiding unrelated output.
+
+## ADR-0017: Opt-in startup debugger activation via `SIGUSR1`
+
+**Context.** The forked FS-UAE build adds a `debugger_signal` option: it installs a `SIGUSR1` handler and enters the console debugger when signalled, with no keyboard interaction.  Pressing F12+D manually every run is tedious for debugging workflows.  But a `SIGUSR1` sent before the handler is installed uses the default action and kills the process, so activation cannot simply be fired at launch.
+
+**Decision.** Add `--startdebug` (default off).  When set, `cli` prefixes the FS-UAE arguments with `--console_debugger=1 --debugger_signal=1 --stdout` (leaving any the user supplied untouched) and the parser recognises the build's `debugger_signal: sending SIGUSR1 will activate the debugger` marker as a `DEBUGGER_SIGNAL_READY` event; `Application._activate_debugger` then sends `SIGUSR1` once through `Session.activate_debugger`.  The marker, which is printed only after the handler is installed, gates the signal.  Without the flag the marker is ignored and activation stays manual.
+
+**Consequences.** An unattended run reaches the debugger prompt at the very beginning without human interaction, while the default stays transparent and F12+D keeps working.  The feature depends on the forked build and a POSIX host, and adds `--stdout` so the marker reaches the console the wrapper reads; a build without the handler either rejects the options or never prints the marker, in which case the wrapper simply never signals and the user falls back to F12+D.

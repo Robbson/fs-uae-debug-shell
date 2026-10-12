@@ -13,7 +13,7 @@ from fs_uae_debug_shell.frames import FrameValueMode
 from fs_uae_debug_shell.output import OutputMode
 from fs_uae_debug_shell.parser import DebuggerOutputParser, EventType, parse_line
 from fs_uae_debug_shell.scenarios import ScenarioCatalog, load_scenarios
-from fs_uae_debug_shell.session import SessionState
+from fs_uae_debug_shell.session import SessionError, SessionState
 
 HIT_LINE = "Memwatch 0: break at 00000574.W  W  0000005B PC=0000C28C CPUDW (000)"
 ENHANCED_HIT_LINE = (
@@ -31,10 +31,14 @@ ENHANCED_FRAMES = (FIXTURES / "enhanced_frames.txt").read_text(encoding="latin-1
 class FakeSession:
     def __init__(self, fd: int = -1) -> None:
         self.sent: list[bytes] = []
+        self.activations = 0
         self._fd = fd
 
     def send_bytes(self, data: bytes) -> None:
         self.sent.append(data)
+
+    def activate_debugger(self) -> None:
+        self.activations += 1
 
     def alive(self) -> bool:
         return True
@@ -442,6 +446,108 @@ class ScenarioAliasTests(unittest.TestCase):
                 ],
             )
             self.assertFalse(app._prompt_ready.is_set())
+
+
+class RegisterDumpFilterTests(unittest.TestCase):
+    """``:showdump`` hides the CPU register dump the debugger prints on a stop."""
+
+    def test_dump_shown_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._consume_output(HIT_LINE + "\n" + DUMP + ">")
+            assert isinstance(app.console, FakeConsole)
+            self.assertIn("D0", app.console.data)
+            self.assertIn("Next PC", app.console.data)
+
+    def test_showdump_off_hides_dump_but_keeps_hit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._handle_line(":showdump off")
+            assert isinstance(app.console, FakeConsole)
+            app.console.data = ""
+            app._consume_output(HIT_LINE + "\n" + DUMP + ">")
+            self.assertIn("Memwatch", app.console.data)
+            self.assertNotIn("D0", app.console.data)
+            self.assertNotIn("Next PC", app.console.data)
+
+    def test_showdump_off_hides_activation_dump(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._handle_line(":showdump off")
+            assert isinstance(app.console, FakeConsole)
+            app.console.data = ""
+            app._consume_output("WARNING: Activated debugger\n" + DUMP + ">")
+            self.assertIn("Activated debugger", app.console.data)
+            self.assertNotIn("D0", app.console.data)
+
+    def test_showdump_on_restores_dump(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._handle_line(":showdump off")
+            app._handle_line(":showdump on")
+            assert isinstance(app.console, FakeConsole)
+            app.console.data = ""
+            app._consume_output(HIT_LINE + "\n" + DUMP + ">")
+            self.assertIn("D0", app.console.data)
+
+    def test_hidden_dump_does_not_hide_following_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._handle_line(":showdump off")
+            assert isinstance(app.console, FakeConsole)
+            app.console.data = ""
+            app._consume_output(HIT_LINE + "\n" + DUMP + "No breakpoints\n>")
+            self.assertIn("No breakpoints", app.console.data)
+
+    def test_status_reports_register_dump(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            self.assertIn("register dump: on", app._status_text())
+            app._handle_line(":showdump off")
+            self.assertIn("register dump: off", app._status_text())
+
+
+class StartDebugTests(unittest.TestCase):
+    """``--startdebug`` enters the debugger via SIGUSR1 once FS-UAE is ready."""
+
+    MARKER = (
+        "debugger_signal: sending SIGUSR1 will activate the debugger "
+        "(requires console_debugger)\n"
+    )
+
+    def test_activates_once_on_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp, start_debug=True)
+            app._consume_output(self.MARKER)
+            assert isinstance(app.session, FakeSession)
+            self.assertEqual(app.session.activations, 1)
+
+    def test_does_not_signal_twice(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp, start_debug=True)
+            app._consume_output(self.MARKER + self.MARKER)
+            assert isinstance(app.session, FakeSession)
+            self.assertEqual(app.session.activations, 1)
+
+    def test_marker_ignored_without_startdebug(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp)
+            app._consume_output(self.MARKER)
+            assert isinstance(app.session, FakeSession)
+            self.assertEqual(app.session.activations, 0)
+
+    def test_activation_failure_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_app(self, tmp, start_debug=True)
+            assert isinstance(app.session, FakeSession)
+
+            def boom() -> None:
+                raise SessionError("boom")
+
+            app.session.activate_debugger = boom  # type: ignore[method-assign]
+            app._consume_output(self.MARKER)
+            assert isinstance(app.console, FakeConsole)
+            self.assertIn("could not activate the debugger", app.console.data)
 
 
 class InputHandlingTests(unittest.TestCase):

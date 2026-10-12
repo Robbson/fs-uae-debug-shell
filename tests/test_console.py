@@ -66,6 +66,12 @@ class WrapperCompleterTests(unittest.TestCase):
     def test_framevalues_argument_choices(self) -> None:
         self.assertEqual(complete(":framevalues "), ["first", "last", "all"])
 
+    def test_showdump_command_completion(self) -> None:
+        self.assertIn("showdump", complete(":show"))
+
+    def test_showdump_argument_choices(self) -> None:
+        self.assertEqual(complete(":showdump "), ["on", "off"])
+
     def test_no_argument_completion_for_no_argument_command(self) -> None:
         self.assertEqual(complete(":help "), [])
 

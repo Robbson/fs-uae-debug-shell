@@ -57,6 +57,7 @@ class CommandDispatcherTests(unittest.TestCase):
             self.assertIn("logfile", result.output)
             self.assertIn("framevalues", result.output)
             self.assertIn("frameagg", result.output)
+            self.assertIn("showdump", result.output)
 
     def test_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -208,6 +209,41 @@ class CommandDispatcherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             dispatcher, _ = make_dispatcher(self, tmp)
             result = dispatcher.dispatch(":frameagg on off")
+            self.assertFalse(result.ok)
+
+    def test_showdump_reports_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":showdump")
+            self.assertTrue(result.ok)
+            self.assertEqual(result.output, "register dump: on")
+
+    def test_showdump_sets_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            for value in ("off", "on", "off"):
+                result = dispatcher.dispatch(f":showdump {value}")
+                self.assertTrue(result.ok, result.output)
+                self.assertEqual(result.output, f"register dump: {value}")
+                self.assertEqual(dispatcher.dump.enabled, value == "on")
+
+    def test_showdump_is_case_insensitive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":showdump OFF")
+            self.assertTrue(result.ok)
+            self.assertFalse(dispatcher.dump.enabled)
+
+    def test_showdump_invalid_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":showdump maybe")
+            self.assertFalse(result.ok)
+
+    def test_showdump_too_many_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dispatcher, _ = make_dispatcher(self, tmp)
+            result = dispatcher.dispatch(":showdump on off")
             self.assertFalse(result.ok)
 
     def test_sci_lists_nothing_without_config(self) -> None:

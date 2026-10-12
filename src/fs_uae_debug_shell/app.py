@@ -16,6 +16,7 @@ from .commands import (
     CommandResult,
 )
 from .config import AppConfig
+from .dump import RegisterDump
 from .eventlog import EventLogError
 from .frames import FrameValueSelector
 from .output import OutputRouter
@@ -36,6 +37,7 @@ class Application:
         self.parser = DebuggerOutputParser()
         self.frames = FrameValueSelector()
         self.aggregate = FrameAggregator()
+        self.dump = RegisterDump()
         self.scenarios = WatchpointRegistry(config.scenarios)
         self.output = OutputRouter(
             base_dir=Path.cwd(),
@@ -55,6 +57,7 @@ class Application:
         self.state = SessionState.RUNNING
         self._stopping = False
         self._suppress_block = False
+        self._debugger_activation_sent = False
         self._prompt_ready = asyncio.Event()
         self._definitions: dict[int, str] = {}
         self.dispatcher = CommandDispatcher(
@@ -64,6 +67,7 @@ class Application:
             aggregate=self.aggregate,
             scenarios=self.scenarios,
             status_provider=self._status_text,
+            dump=self.dump,
         )
 
     # -- lifecycle -----------------------------------------------------------
@@ -169,6 +173,9 @@ class Application:
 
     def _handle_piece(self, piece: Piece, out: list[str]) -> None:
         event = piece.event
+        if piece.in_dump and not self.dump.enabled:
+            # Hide the CPU register dump; only the terminal view is affected.
+            return
         if event is not None and event.type is EventType.WATCHPOINT_HIT:
             for emitted in self.frames.select(piece):
                 self._emit_hit(emitted, out)
@@ -256,6 +263,8 @@ class Application:
                 self._on_hit(event.hit, out)
             elif event.type is EventType.DEBUGGER_ACTIVATED:
                 self.state = SessionState.STOPPED
+            elif event.type is EventType.DEBUGGER_SIGNAL_READY:
+                self._activate_debugger()
             elif event.type is EventType.PROMPT:
                 self.state = SessionState.STOPPED
                 self._prompt_ready.set()
@@ -266,6 +275,23 @@ class Application:
                     f"{definition.start:08X}-{definition.end:08X} "
                     f"({definition.length}) {definition.access} {definition.scope}"
                 )
+
+    def _activate_debugger(self) -> None:
+        """Enter the debugger at startup with ``--startdebug``.
+
+        Sent once, after FS-UAE prints its signal-ready marker (an earlier
+        ``SIGUSR1`` would kill the process).  Without ``--startdebug`` the
+        marker is ignored and activation stays manual (F12+D).
+        """
+
+        if not self.config.start_debug or self._debugger_activation_sent:
+            return
+        self._debugger_activation_sent = True
+        try:
+            self.session.activate_debugger()
+        except SessionError as exc:
+            log.error("could not activate the debugger: %s", exc)
+            self._write(f"\n[wrapper] error: could not activate the debugger: {exc}\n")
 
     def _on_hit(self, hit: WatchpointHit, out: list[str] | None = None) -> None:
         self.state = SessionState.STOPPED
@@ -346,6 +372,7 @@ class Application:
             f"output: {self.output.mode.value}",
             f"frame values: {self.frames.mode.value}",
             f"frame aggregation: {'on' if self.aggregate.enabled else 'off'}",
+            f"register dump: {'on' if self.dump.enabled else 'off'}",
         ]
         name = self.output.display_name()
         if not self.output.created:
@@ -398,11 +425,19 @@ class Application:
 
     def _print_startup_banner(self) -> None:
         args = " ".join(self.config.fsuae_args)
+        if self.config.start_debug:
+            activation = (
+                "; the debugger will be activated automatically at startup.\n"
+            )
+        else:
+            activation = (
+                "; activate the debugger with F12+D when the game is running.\n"
+            )
         sys.stderr.write(
             "[wrapper] started FS-UAE"
             + (f" ({args})" if args else "")
-            + "; activate the debugger with F12+D when the game is running.\n"
-            f"[wrapper] type '{self.config.prefix}help' at the debugger prompt "
+            + activation
+            + f"[wrapper] type '{self.config.prefix}help' at the debugger prompt "
             "for shell commands.\n"
         )
         sys.stderr.flush()
